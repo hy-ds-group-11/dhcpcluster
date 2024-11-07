@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "client",
+    "server-node",
+]
+resolver = "2"

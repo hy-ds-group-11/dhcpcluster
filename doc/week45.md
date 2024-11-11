@@ -12,3 +12,7 @@ So far the group has settled on these initial (and aspirational) implementation 
 - Custom DHCP Relay Agent that is aware of the distribution ("load balancer")
 - (Ideally would) expose DHCP interface to users with distribution transparency
   - Low priority
+
+## 2024-11-07
+
+Added intial Cargo workspace structure.

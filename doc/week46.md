@@ -1,6 +1,6 @@
 ## 2024-11-14
 
-We created a [design document](design.md) design document conforming to project description.
+We created a [design document](design.md) conforming to project description.
 
 Some thoughts and ideas by yours truly (Lauri) (written while others are busy writing the design document):
 - We could do integration testing by mocking TcpStream

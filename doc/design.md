@@ -27,7 +27,6 @@ flowchart TD
 ```
 
 ## Design details
-The system is designed to use odd number of nodes to guarantee that majority can always be reached.
 The demo system will have 3 nodes, which means that the cluster can continue working with one crashed node.
 The elected leader node has the responsibility to make sure that the majority of nodes can communicate with each other.
 If not, the cluster should not work, as the leader could be the only one who cannot communicate with others.

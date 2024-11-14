@@ -13,4 +13,4 @@ Weekly notes :notebook_with_decorative_cover:
 | Week | Summary |
 | :--- | :---    |
 | [45](doc/week45.md) | Initial planning and specification |
-| [46](doc/week46.md) | :construction: Under construction :construction_worker: |
+| [46](doc/week46.md) | Design work and documentation |

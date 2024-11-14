@@ -26,7 +26,26 @@ flowchart TD
     B <-->|Elections/Leases| D
 ```
 
-## Nodes
+## Design details
+The system is designed to use odd number of nodes to guarantee that majority can always be reached.
+The demo system will have 3 nodes, which means that the cluster can continue working with one crashed node.
+The elected leader node has the responsibility to make sure that the majority of nodes can communicate with each other.
+If not, the cluster should not work, as the leader could be the only one who cannot communicate with others.
+In this case, the other nodes have already selected a new leader, and this mechanism makes sure that there can never be two competing parts of the cluster working.
+
+The leader also divides the allocated IP-address pool between the nodes.
+This division has to be redone if the amount of active nodes changes, or if some nodes are running low on available addresses.
+By dividing the pool between the nodes, there is no need for complex communication within the cluster for every single lease offered.
+Each node can just offer a lease from their share of the pool, and then sync the lease to the other nodes after it is finished.
+Every node should have a consistent lease table state.
+Then any node can renew a lease even if it was initially given out by some other node in the cluster.
+
+Configuration syncing is also done by the leader node.
+The nodes need to have the other nodes included in the configuration to know how to contact them and to know how many nodes there should be in total.
+Static leases are also a thing that we might want to be included in the configuration system.
+
+The client is the one distributing the queries to the nodes according to latency.
+For testing and demo purposes, the test client will be able to generate DHCP traffic, and distribute it in different ways.
 
 ## Messages
 

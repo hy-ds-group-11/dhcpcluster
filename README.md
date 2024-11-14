@@ -6,6 +6,8 @@ Fall 2024, Group 11
 
 ## Documentation
 
+[Design document :paperclip:](doc/design.md)
+
 Weekly notes :notebook_with_decorative_cover:
 
 | Week | Summary |

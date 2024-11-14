@@ -9,3 +9,17 @@ All nodes will run the same software, with leader election to choose a node to m
 The cluster will have a single configuration for the DHCP ranges, with subsets assigned to individual nodes dynamically.
 The leases are a shared state between all nodes, which allows the cluster to recover from the loss of a node.
 Choosing the best node to connect to will be done by a custom DHCP relay agent.
+
+## Diagram of nodes and client
+
+Primary messages listed for each connection. Leader also sends the range allocations to each node.
+
+TODO
+
+## Design details
+
+TODO
+
+## Messages
+
+TODO

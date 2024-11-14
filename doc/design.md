@@ -14,7 +14,17 @@ Choosing the best node to connect to will be done by a custom DHCP relay agent.
 
 Primary messages listed for each connection. Leader also sends the range allocations to each node.
 
-TODO
+```mermaid
+flowchart TD
+    A(Client) <-->|Ping/DHCP| B(Node 1)
+    B <-->|Elections/Leases| C(Node 2)
+    A <-->|Ping/DHCP| C
+    C <-->|Elections/Leases| D(Node 3
+    leader
+    )
+    A <-->|Ping/DHCP| D
+    B <-->|Elections/Leases| D
+```
 
 ## Design details
 

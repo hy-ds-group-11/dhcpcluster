@@ -8,7 +8,7 @@ Fall 2024, Group 11
 
 [Design document :paperclip:](doc/design.md)
 
-Weekly notes :notebook_with_decorative_cover:
+### Weekly notes :notebook_with_decorative_cover:
 
 | Week | Summary |
 | :--- | :---    |

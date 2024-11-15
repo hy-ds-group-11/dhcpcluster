@@ -4,6 +4,7 @@ use std::{error::Error, net::SocketAddr, path::Path, str::FromStr};
 #[derive(Deserialize, Debug)]
 struct ConfigFile {
     address_private: SocketAddr,
+    nodes: Vec<SocketAddr>,
     // TODO DHCP interface?
 }
 
@@ -26,11 +27,20 @@ impl ConfigFile {
 #[derive(Debug)]
 pub struct Config {
     pub address_private: SocketAddr,
+    pub nodes: Vec<SocketAddr>,
 }
 
 impl Config {
-    fn from_config_file(ConfigFile { address_private }: ConfigFile) -> Self {
-        Self { address_private }
+    fn from_config_file(
+        ConfigFile {
+            address_private,
+            nodes,
+        }: ConfigFile,
+    ) -> Self {
+        Self {
+            address_private,
+            nodes,
+        }
     }
 
     pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {

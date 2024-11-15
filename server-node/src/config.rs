@@ -17,14 +17,6 @@ impl FromStr for ConfigFile {
     }
 }
 
-impl ConfigFile {
-    pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        let toml = std::fs::read_to_string(path)?;
-        let conf = Self::from_str(&toml)?;
-        Ok(conf)
-    }
-}
-
 #[derive(Debug)]
 pub struct Config {
     pub address_private: SocketAddr,
@@ -53,6 +45,8 @@ impl From<ConfigFile> for Config {
 
 impl Config {
     pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        ConfigFile::load_toml_file(path).map(Into::into)
+        let toml = std::fs::read_to_string(path)?;
+        let conf = ConfigFile::from_str(&toml)?;
+        Ok(conf.into())
     }
 }

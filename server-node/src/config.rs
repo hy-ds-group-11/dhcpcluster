@@ -18,7 +18,7 @@ impl FromStr for ConfigFile {
 }
 
 impl ConfigFile {
-    pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         let toml = std::fs::read_to_string(path)?;
         let conf = Self::from_str(&toml)?;
         Ok(conf)
@@ -32,8 +32,11 @@ pub struct Config {
     pub id: u32,
 }
 
-impl Config {
-    fn from_config_file(
+impl From<ConfigFile> for Config {
+    // This implementation is a no-op for now, but down the line it's possible
+    // that our server configuration struct diverges from the
+    // configuration file contents
+    fn from(
         ConfigFile {
             address_private,
             nodes,
@@ -46,8 +49,10 @@ impl Config {
             id,
         }
     }
+}
 
-    pub fn from_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
-        Ok(Self::from_config_file(ConfigFile::from_toml_file(path)?))
+impl Config {
+    pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+        ConfigFile::load_toml_file(path).map(Into::into)
     }
 }

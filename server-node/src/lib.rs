@@ -10,7 +10,7 @@ use std::{
 };
 
 #[derive(Serialize, Deserialize)]
-pub struct Lease {}
+pub struct Lease {/* TODO */}
 
 struct Node {
     address: SocketAddr,
@@ -28,8 +28,8 @@ pub struct Server {
 }
 
 impl Server {
-    pub fn new(config: Config) -> Result<Self, Box<dyn Error>> {
-        Ok(Self {
+    pub fn new(config: Config) -> Self {
+        Self {
             cluster: Cluster {
                 nodes: config
                     .nodes
@@ -41,7 +41,7 @@ impl Server {
                     .collect(),
                 coordinator_index: None,
             },
-        })
+        }
     }
 
     fn assign_stream_to_node(&mut self, stream: TcpStream) -> Result<(), Box<dyn Error>> {
@@ -64,15 +64,15 @@ impl Server {
                 Ok(stream) => self
                     .assign_stream_to_node(stream)
                     .unwrap_or_else(|e| eprintln!("{e:?}")),
-                Err(error) => eprintln!("{error:?}"),
+                Err(e) => eprintln!("{e:?}"),
             }
         }
     }
 
-    pub fn start(mut self, listener: TcpListener) -> Result<(), Box<dyn Error>> {
-        let node_listener_thread = thread::spawn(move || self.listen_nodes(listener));
+    pub fn start(mut self, peer_listener: TcpListener) -> Result<(), Box<dyn Error>> {
+        let peer_listener_thread = thread::spawn(move || self.listen_nodes(peer_listener));
 
-        node_listener_thread.join().map_err(|e| {
+        peer_listener_thread.join().map_err(|e| {
             format!(
                 "Node listener thread paniced, Err: {:?}",
                 e.downcast_ref::<&str>()

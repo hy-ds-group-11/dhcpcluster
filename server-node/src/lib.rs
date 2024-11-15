@@ -20,8 +20,6 @@ struct Cluster {
     nodes: Vec<Node>,
     #[allow(dead_code)]
     coordinator_index: Option<usize>,
-    #[allow(dead_code)]
-    size: u32,
 }
 
 pub struct Server {
@@ -41,7 +39,6 @@ impl Server {
                     })
                     .collect(),
                 coordinator_index: None,
-                size: u32::try_from(config.nodes.len()).expect("Can't have more than 2^32 nodes"),
             },
         })
     }

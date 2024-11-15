@@ -1,13 +1,13 @@
-mod config;
-
-use config::Config;
-use std::error::Error;
+use server_node::{config::Config, Server};
+use std::{error::Error, net::TcpListener};
 
 fn main() -> Result<(), Box<dyn Error>> {
     // TODO don't hardcode a single path here
-    let config = Config::from_toml_file("config.toml")?;
+    let config = dbg!(Config::from_toml_file("config.toml")?);
 
-    println!("{config:?}");
+    let listener = TcpListener::bind(config.address_private)?;
+    let server = Server::new(config)?;
+    server.start(listener)?;
 
     Ok(())
 }

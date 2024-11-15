@@ -5,6 +5,7 @@ use std::{error::Error, net::SocketAddr, path::Path, str::FromStr};
 struct ConfigFile {
     address_private: SocketAddr,
     nodes: Vec<SocketAddr>,
+    id: u32,
     // TODO DHCP interface?
 }
 
@@ -28,6 +29,7 @@ impl ConfigFile {
 pub struct Config {
     pub address_private: SocketAddr,
     pub nodes: Vec<SocketAddr>,
+    pub id: u32,
 }
 
 impl Config {
@@ -35,11 +37,13 @@ impl Config {
         ConfigFile {
             address_private,
             nodes,
+            id,
         }: ConfigFile,
     ) -> Self {
         Self {
             address_private,
             nodes,
+            id,
         }
     }
 

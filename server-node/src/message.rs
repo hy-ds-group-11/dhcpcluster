@@ -4,6 +4,7 @@ use crate::Lease;
 
 #[derive(Serialize, Deserialize)]
 pub enum Message {
+    Join,
     Heartbeat,
     Election,
     Okay,

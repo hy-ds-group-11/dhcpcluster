@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
     net::{SocketAddr, TcpListener, TcpStream},
+    thread,
 };
 
 #[derive(Serialize, Deserialize)]
@@ -57,7 +58,7 @@ impl Server {
         Ok(())
     }
 
-    pub fn start(mut self, listener: TcpListener) -> Result<(), Box<dyn Error>> {
+    fn listen_nodes(&mut self, listener: TcpListener) {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => self
@@ -66,7 +67,17 @@ impl Server {
                 Err(error) => eprintln!("{error:?}"),
             }
         }
+    }
 
-        Ok(())
+    pub fn start(mut self, listener: TcpListener) -> Result<(), Box<dyn Error>> {
+        let node_listener_thread = thread::spawn(move || self.listen_nodes(listener));
+
+        node_listener_thread.join().map_err(|e| {
+            format!(
+                "Node listener thread paniced, Err: {:?}",
+                e.downcast_ref::<&str>()
+            )
+            .into()
+        })
     }
 }

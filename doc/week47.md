@@ -1,6 +1,6 @@
 ## 2024-11-19
 
-Over the weekend, we have been pondering on our options for choosing the mechanism which would allow us to concurrently receive messages from N-1 `TcpStream`s.
+Over the weekend, we have been pondering our options for choosing the mechanism which would allow us to concurrently receive messages from N-1 `TcpStream`s.
 
 In summary, the options are:
 - Have N-1 threads that each own one `TcpStream`, and using blocking reads on the streams
@@ -9,8 +9,6 @@ In summary, the options are:
 - Use `tokio` and `async` Rust
 
 There is a lot to write about each option, but ChatGPT summarized the pros and cons very well:
-
-### Here's a breakdown of each:
 
 ### 1. **One thread per `TcpStream` (blocking reads)**
    - **Pros:**

@@ -10,7 +10,7 @@ In summary, the options are:
 
 There is a lot to write about each option, but ChatGPT summarized the pros and cons very well:
 
-## Here's a breakdown of each:
+### Here's a breakdown of each:
 
 ### 1. **One thread per `TcpStream` (blocking reads)**
    - **Pros:**

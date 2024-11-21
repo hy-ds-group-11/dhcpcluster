@@ -45,3 +45,15 @@ For performance and scalability, I'd recommend using a library that abstracts ov
 ### Conclusion:
 - If you want a simple, easier-to-maintain solution and `N` is small, the one-thread-per-connection approach might work well for you.
 - For better scalability, consider leveraging async I/O with a library like `Tokio` rather than manually managing `epoll`. It will reduce complexity and improve performance, especially as the number of nodes grows.
+
+## 2024-11-21
+
+We had an intensive mob programming session, where we settled on proceeding with the threaded solution.
+It turns out, that we want to spawn two threads per peer, one for blocking reads and
+the other for blocking writes! This way the message transmissions to other peers will not
+halt, even if one of the peers is slow to respond or a timeout must be reached in the event that
+a peer crashes. Passing messages to the sender thread was accomplished with a standard Rust mpsc channel.
+
+We also added some actual server to server communication, so the first messages
+(handshakes and acknowledgements) were exchanged.
+There are no immediate roadblocks in the horizon right now.

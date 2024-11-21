@@ -2,8 +2,11 @@ use server_node::{config::Config, Server};
 use std::{error::Error, net::TcpListener};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // TODO don't hardcode a single path here
-    let config = dbg!(Config::load_toml_file("config.toml")?);
+    let config = match Config::load_toml_file("config.toml") {
+        Ok(config) => config,
+        Err(_) => Config::load_toml_file("server-node/config.toml")?,
+    };
+    dbg!(&config);
 
     let peer_listener = TcpListener::bind(config.address_private)?;
     let server = Server::new(config);

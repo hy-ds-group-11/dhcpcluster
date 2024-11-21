@@ -6,7 +6,6 @@ use crate::{config::Config, peer::Peer};
 use message::Message;
 use serde::{Deserialize, Serialize};
 use std::{
-    any::Any,
     error::Error,
     io::{Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
@@ -73,7 +72,7 @@ impl Cluster {
     /// Initialize cluster, and try connecting to peers.
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
     /// After connecting to peers, `run_server(stream)` needs to be called.
-    pub fn connect<S: MessageStream + 'static + Any>(config: Config) -> Self {
+    pub fn connect<S: MessageStream + 'static>(config: Config) -> Self {
         let mut peers = Vec::new();
         let server = Server::new(&config);
 
@@ -193,6 +192,7 @@ impl Server {
 mod tests {
     use super::*;
     use std::{
+        any::Any,
         cell::RefCell,
         collections::VecDeque,
         net::SocketAddr,

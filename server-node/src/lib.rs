@@ -5,12 +5,17 @@ use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
     thread,
+    time::SystemTime,
 };
 
 #[derive(Serialize, Deserialize)]
-pub struct Lease {/* TODO */}
+pub struct Lease {
+    hardware_address: [u8; 6],    // Assume MAC address
+    lease_address: Ipv4Addr,      // Assume IPv4 for now
+    expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
+}
 
 struct Node {
     address: SocketAddr,

@@ -1,26 +1,27 @@
 use std::{
-    io::Read,
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
-    thread::{self, sleep, JoinHandle},
+    thread::{self, JoinHandle},
 };
 
 use crate::message::Message;
 
 /// Peer connection
 pub struct Peer {
-    id: Option<u32>,
+    id: u32,
     tx: Sender<Message>,
     read_thread: JoinHandle<()>,
     write_thread: JoinHandle<()>,
 }
 
 impl Peer {
-    pub fn new(stream: TcpStream) -> Self {
+    pub fn new(stream: TcpStream, id: u32) -> Self {
+        println!("Started connection to peer with id {id}");
         let stream_clone = stream.try_clone().unwrap();
         let (tx, rx) = mpsc::channel::<Message>();
+
         Self {
-            id: None,
+            id,
             tx,
             read_thread: thread::spawn(move || Self::read_thread_fn(stream_clone)),
             write_thread: thread::spawn(move || Self::write_thread_fn(stream, rx)),
@@ -33,8 +34,18 @@ impl Peer {
 
     fn read_thread_fn(stream: TcpStream) {
         loop {
-            let message = ciborium::from_reader::<Message, &TcpStream>(&stream);
-            dbg!(message);
+            let message = ciborium::from_reader::<Message, &TcpStream>(&stream).unwrap();
+            dbg!(&message);
+            match message {
+                Message::Join(_) => panic!("Peer tried to send Join message after handshake"),
+                Message::JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
+                Message::Heartbeat => todo!(),
+                Message::Election => todo!(),
+                Message::Okay => todo!(),
+                Message::Coordinator => todo!(),
+                Message::Add(lease) => todo!(),
+                Message::Update(lease) => todo!(),
+            }
         }
     }
 

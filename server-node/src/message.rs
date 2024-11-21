@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
-    Join,
+    Join(u32),
+    JoinAck(u32),
     Heartbeat,
     Election,
     Okay,

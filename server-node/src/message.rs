@@ -1,7 +1,7 @@
 use crate::Lease;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Message {
     Join(u32),
     JoinAck(u32),

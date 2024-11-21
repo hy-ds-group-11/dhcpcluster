@@ -2,19 +2,60 @@ pub mod config;
 mod message;
 mod peer;
 
-use crate::config::Config;
-use crate::peer::Peer;
+use crate::{config::Config, peer::Peer};
 use message::Message;
 use serde::{Deserialize, Serialize};
-use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use std::{error::Error, net::TcpListener, thread};
-use std::{net::Ipv4Addr, time::SystemTime};
+use std::{
+    any::Any,
+    error::Error,
+    io::{Read, Write},
+    net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
+    sync::{Arc, Mutex},
+    thread,
+    time::{Duration, SystemTime},
+};
+
+/// Describes all essential features that a message carrier such as [`std::net::TcpStream`] must have.
+///
+/// This trait is needed for mocking in tests.
+pub trait MessageStream: Read + Write + Send + Sized {
+    fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self>;
+
+    fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()>;
+
+    fn clone(&self) -> Self;
+
+    /// Convenience method which reads and deserializes a message
+    fn receive_message(&mut self) -> Result<Message, ciborium::de::Error<std::io::Error>> {
+        ciborium::from_reader::<Message, &mut Self>(self)
+    }
+
+    /// Convenience method which serializes a message and writes it
+    fn send_message(
+        &mut self,
+        message: &Message,
+    ) -> Result<(), ciborium::ser::Error<std::io::Error>> {
+        ciborium::into_writer::<Message, &mut Self>(message, self)
+    }
+}
+
+impl MessageStream for TcpStream {
+    fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+        Self::connect(addr)
+    }
+
+    fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
+        self.set_read_timeout(dur)
+    }
+
+    fn clone(&self) -> Self {
+        self.try_clone().unwrap()
+    }
+}
 
 type Leases = Arc<Mutex<Vec<Lease>>>;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Lease {
     hardware_address: [u8; 6],    // Assume MAC address
     lease_address: Ipv4Addr,      // Assume IPv4 for now
@@ -32,13 +73,17 @@ impl Cluster {
     /// Initialize cluster, and try connecting to peers.
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
     /// After connecting to peers, `run_server(stream)` needs to be called.
-    pub fn connect(config: Config) -> Self {
+    pub fn connect<S: MessageStream + 'static + Any>(config: Config) -> Self {
         let mut peers = Vec::new();
         let server = Server::new(&config);
 
         for peer_address in config.peers {
-            match TcpStream::connect(peer_address) {
+            match S::connect(peer_address) {
                 Ok(stream) => {
+                    // When testing, store established streams for inspection
+                    #[cfg(test)]
+                    tests::push_stream(stream.clone());
+
                     let result = Self::start_handshake(stream, config.id, &server);
                     match result {
                         Ok(peer) => peers.push(peer),
@@ -57,20 +102,20 @@ impl Cluster {
     }
 
     fn start_handshake(
-        stream: TcpStream,
+        mut stream: impl MessageStream + 'static,
         id: u32,
         server: &Server,
     ) -> Result<Peer, Box<dyn Error>> {
-        let result = ciborium::into_writer::<Message, &TcpStream>(&Message::Join(id), &stream);
+        let result = stream.send_message(&Message::Join(id));
         match result {
             Ok(_) => {
                 stream
                     .set_read_timeout(Some(Duration::from_millis(500)))
                     .unwrap();
-                let message = ciborium::from_reader::<Message, &TcpStream>(&stream).unwrap();
+                let message = stream.receive_message().unwrap();
                 stream.set_read_timeout(None).unwrap();
 
-                match message {
+                match dbg!(message) {
                     Message::JoinAck(peer_id) => {
                         Ok(Peer::new(stream, peer_id, Arc::clone(&server.leases)))
                     }
@@ -84,19 +129,16 @@ impl Cluster {
         }
     }
 
-    fn answer_handshake(&mut self, stream: TcpStream) {
+    fn answer_handshake(&mut self, mut stream: impl MessageStream + 'static) {
         stream
             .set_read_timeout(Some(Duration::from_millis(500)))
             .unwrap();
-        let message = ciborium::from_reader::<Message, &TcpStream>(&stream).unwrap();
+        let message = stream.receive_message().unwrap();
         stream.set_read_timeout(None).unwrap();
 
         match message {
             Message::Join(id) => {
-                let result = ciborium::into_writer::<Message, &TcpStream>(
-                    &Message::JoinAck(self.server.id),
-                    &stream,
-                );
+                let result = stream.send_message(&Message::JoinAck(self.server.id));
                 match result {
                     Ok(_) => {
                         self.peers
@@ -144,5 +186,167 @@ impl Server {
             id: config.id,
             leases: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        cell::RefCell,
+        collections::VecDeque,
+        net::SocketAddr,
+        sync::{LazyLock, MutexGuard},
+    };
+
+    struct MockStreamRaw {
+        connected: Option<SocketAddr>,
+        read_timeout: RefCell<Option<Duration>>,
+        sent_data: VecDeque<u8>,
+        reply_data: VecDeque<u8>,
+    }
+
+    pub struct MockStream {
+        inner: Arc<Mutex<MockStreamRaw>>,
+    }
+
+    impl MockStream {
+        fn send_replies(&mut self, sequence: &[Message]) {
+            for message in sequence {
+                ciborium::into_writer::<Message, &mut VecDeque<u8>>(
+                    message,
+                    &mut self.inner.lock().unwrap().reply_data,
+                )
+                .unwrap();
+            }
+        }
+
+        fn get_messages(&mut self) -> Vec<Message> {
+            // TODO refactor with iterators and collect
+            let mut messages = Vec::new();
+            while let Ok(message) = ciborium::from_reader(&mut self.inner.lock().unwrap().sent_data)
+            {
+                messages.push(message);
+            }
+            messages
+        }
+    }
+
+    impl Write for MockStream {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.inner.lock().unwrap().sent_data.write(buf)
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.lock().unwrap().sent_data.flush()
+        }
+    }
+
+    impl Read for MockStream {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.inner.lock().unwrap().reply_data.read(buf)
+        }
+    }
+
+    impl MessageStream for MockStream {
+        fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+            Ok(Self {
+                inner: Arc::new(Mutex::new(MockStreamRaw {
+                    connected: addr.to_socket_addrs()?.next(),
+                    read_timeout: RefCell::new(None),
+                    sent_data: VecDeque::new(),
+                    reply_data: VecDeque::new(),
+                })),
+            })
+        }
+
+        fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
+            *self.inner.lock().unwrap().read_timeout.borrow_mut() = dur;
+            Ok(())
+        }
+
+        fn clone(&self) -> Self {
+            Self {
+                inner: Arc::clone(&self.inner),
+            }
+        }
+    }
+
+    // This global is used for gathering MockStreams from the server initialization during tests
+    static STREAMS: LazyLock<Mutex<Vec<MockStream>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+    // In tests where the MockStreams should reply to the server,
+    // you must push the desired message sequences to this global.
+    // Outer vec stores message sequences in the order of established connections,
+    // Inner vec is the sequence of Messages
+    static REPLIES: LazyLock<Mutex<Vec<Vec<Message>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+    pub fn push_stream(stream: impl MessageStream + 'static) {
+        let mut streams = STREAMS.lock().expect("STREAMS.lock() failed");
+        let stream_index = streams.len();
+
+        let stream: Box<dyn Any> = Box::new(stream.clone());
+        let mut stream = *(stream
+            .downcast::<MockStream>()
+            .expect("Non-mock MessageStream used in tests"));
+
+        let replies = REPLIES.lock().expect("REPLIES.lock() failed");
+        if let Some(sequence) = replies.get(stream_index) {
+            stream.send_replies(sequence);
+        }
+
+        streams.push(stream);
+    }
+
+    fn with_streams<'a>(f: impl FnOnce(MutexGuard<'a, Vec<MockStream>>)) {
+        let lock = STREAMS.lock().expect("STREAMS.lock() failed");
+        f(lock)
+    }
+
+    fn push_reply_sequence(sequence: Vec<Message>) {
+        REPLIES
+            .lock()
+            .expect("REPLIES.lock() failed")
+            .push(sequence)
+    }
+
+    #[test]
+    fn cluster_connect_to_no_peers() {
+        let config = Config {
+            address_private: ([0u8; 4], 1234).into(),
+            peers: vec![],
+            id: 0,
+        };
+        let cluster = Cluster::connect::<MockStream>(config);
+        assert!(cluster.peers.is_empty());
+        assert!(cluster.coordinator_id.is_none());
+        assert!(cluster.server.leases.lock().unwrap().is_empty());
+        assert_eq!(cluster.server.id, 0);
+        with_streams(|streams| assert!(streams.is_empty()));
+    }
+
+    #[test]
+    fn cluster_connect_to_one_peer() {
+        push_reply_sequence(vec![Message::JoinAck(1)]);
+
+        let config = Config {
+            address_private: ([0u8; 4], 1234).into(),
+            peers: vec!["123.123.123.123:8909".parse().unwrap()],
+            id: 0,
+        };
+        let cluster = Cluster::connect::<MockStream>(config);
+
+        assert!(cluster.coordinator_id.is_none());
+        assert!(cluster.server.leases.lock().unwrap().is_empty());
+        assert_eq!(cluster.server.id, 0);
+        with_streams(|mut streams| {
+            assert_eq!(streams[0].get_messages(), vec![Message::Join(0)]);
+            assert_eq!(streams.len(), 1);
+            let stream = streams[0].inner.lock().unwrap();
+            assert_eq!(
+                stream.connected,
+                Some("123.123.123.123:8909".parse().unwrap())
+            );
+        });
     }
 }

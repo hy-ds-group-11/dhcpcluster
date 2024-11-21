@@ -1,7 +1,7 @@
 use server_node::{config::Config, Cluster};
 use std::{
     error::Error,
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
 };
 
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     dbg!(&config);
 
     let peer_listener = TcpListener::bind(config.address_private)?;
-    let cluster = Cluster::connect(config);
+    let cluster = Cluster::connect::<TcpStream>(config);
     cluster.start_server(peer_listener)?;
 
     Ok(())

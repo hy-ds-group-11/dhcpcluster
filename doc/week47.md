@@ -57,3 +57,11 @@ a peer crashes. Passing messages to the sender thread was accomplished with a st
 We also added some actual server to server communication, so the first messages
 (handshakes and acknowledgements) were exchanged.
 There are no immediate roadblocks in the horizon right now.
+
+Later in the evening, I (Lauri) got inspired to try to write tests for the server.
+It was difficult and time consuming to first make the implementation generic over
+a "TcpStream" implementation, and then mock the TcpStream, but the end result is
+a working initial implementation for a test suite.
+
+For the mocking to work, I had to use some Rust features that I have only learned very recently,
+such as the Any-trait and interior mutability with RefCell.

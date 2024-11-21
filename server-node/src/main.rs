@@ -1,4 +1,4 @@
-use server_node::{config::Config, Server};
+use server_node::{config::Config, Cluster};
 use std::{
     error::Error,
     net::TcpListener,
@@ -18,8 +18,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     dbg!(&config);
 
     let peer_listener = TcpListener::bind(config.address_private)?;
-    let server = Server::new(config);
-    server.start(peer_listener)?;
+    let cluster = Cluster::connect(config);
+    cluster.start_server(peer_listener)?;
 
     Ok(())
 }

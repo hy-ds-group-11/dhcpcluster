@@ -4,7 +4,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::message::Message;
+use crate::{message::Message, Leases};
 
 /// Peer connection
 pub struct Peer {
@@ -15,7 +15,7 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(stream: TcpStream, id: u32) -> Self {
+    pub fn new(stream: TcpStream, id: u32, leases: Leases) -> Self {
         println!("Started connection to peer with id {id}");
         let stream_clone = stream.try_clone().unwrap();
         let (tx, rx) = mpsc::channel::<Message>();
@@ -23,7 +23,7 @@ impl Peer {
         Self {
             _id: id,
             _tx: tx,
-            _read_thread: thread::spawn(move || Self::read_thread_fn(stream_clone)),
+            _read_thread: thread::spawn(move || Self::read_thread_fn(stream_clone, leases)),
             _write_thread: thread::spawn(move || Self::write_thread_fn(stream, rx)),
         }
     }
@@ -34,7 +34,7 @@ impl Peer {
             .unwrap_or_else(|e| eprintln!("{e:?}"));
     }
 
-    fn read_thread_fn(stream: TcpStream) {
+    fn read_thread_fn(stream: TcpStream, leases: Leases) {
         loop {
             let message = ciborium::from_reader::<Message, &TcpStream>(&stream).unwrap();
             dbg!(&message);
@@ -45,7 +45,10 @@ impl Peer {
                 Message::Election => todo!(),
                 Message::Okay => todo!(),
                 Message::Coordinator => todo!(),
-                Message::Add(_lease) => todo!(),
+                Message::Add(lease) => {
+                    // TODO: checks needed for the lease
+                    leases.lock().unwrap().push(lease);
+                }
                 Message::Update(_lease) => todo!(),
             }
         }

@@ -1,14 +1,12 @@
 pub mod config;
 mod message;
+mod peer;
 
 use crate::config::Config;
+use crate::peer::Peer;
 use serde::{Deserialize, Serialize};
-use std::{
-    error::Error,
-    net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream},
-    thread,
-    time::SystemTime,
-};
+use std::{error::Error, net::TcpListener, thread};
+use std::{net::Ipv4Addr, time::SystemTime};
 
 #[derive(Serialize, Deserialize)]
 pub struct Lease {
@@ -17,13 +15,8 @@ pub struct Lease {
     expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
-struct Node {
-    address: SocketAddr,
-    stream: Option<TcpStream>,
-}
-
 struct Cluster {
-    nodes: Vec<Node>,
+    peers: Vec<Peer>,
     #[allow(dead_code)]
     coordinator_index: Option<usize>,
 }
@@ -36,39 +29,16 @@ impl Server {
     pub fn new(config: Config) -> Self {
         Self {
             cluster: Cluster {
-                nodes: config
-                    .nodes
-                    .iter()
-                    .map(|address| Node {
-                        address: *address,
-                        stream: None,
-                    })
-                    .collect(),
+                peers: Vec::new(),
                 coordinator_index: None,
             },
         }
     }
 
-    fn assign_stream_to_node(&mut self, stream: TcpStream) -> Result<(), Box<dyn Error>> {
-        let addr = stream.peer_addr()?;
-        let node = self
-            .cluster
-            .nodes
-            .iter_mut()
-            .find(|node| node.address == addr);
-        match node {
-            Some(node) => node.stream = Some(stream),
-            None => return Err(format!("No matching node with address {addr} found").into()),
-        }
-        Ok(())
-    }
-
     fn listen_nodes(&mut self, listener: TcpListener) {
         for stream in listener.incoming() {
             match stream {
-                Ok(stream) => self
-                    .assign_stream_to_node(stream)
-                    .unwrap_or_else(|e| eprintln!("{e:?}")),
+                Ok(stream) => self.cluster.peers.push(Peer::new(stream)),
                 Err(e) => eprintln!("{e:?}"),
             }
         }
@@ -79,7 +49,7 @@ impl Server {
 
         peer_listener_thread.join().map_err(|e| {
             format!(
-                "Node listener thread paniced, Err: {:?}",
+                "Node listener thread panicked, Err: {:?}",
                 e.downcast_ref::<&str>()
             )
             .into()

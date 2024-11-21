@@ -1,7 +1,7 @@
 use crate::Lease;
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub enum Message {
     Join,
     Heartbeat,

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::{error::Error, net::TcpListener, thread};
 use std::{net::Ipv4Addr, time::SystemTime};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct Lease {
     hardware_address: [u8; 6],    // Assume MAC address
     lease_address: Ipv4Addr,      // Assume IPv4 for now

@@ -8,10 +8,10 @@ use crate::message::Message;
 
 /// Peer connection
 pub struct Peer {
-    id: u32,
-    tx: Sender<Message>,
-    read_thread: JoinHandle<()>,
-    write_thread: JoinHandle<()>,
+    _id: u32,
+    _tx: Sender<Message>,
+    _read_thread: JoinHandle<()>,
+    _write_thread: JoinHandle<()>,
 }
 
 impl Peer {
@@ -21,15 +21,17 @@ impl Peer {
         let (tx, rx) = mpsc::channel::<Message>();
 
         Self {
-            id,
-            tx,
-            read_thread: thread::spawn(move || Self::read_thread_fn(stream_clone)),
-            write_thread: thread::spawn(move || Self::write_thread_fn(stream, rx)),
+            _id: id,
+            _tx: tx,
+            _read_thread: thread::spawn(move || Self::read_thread_fn(stream_clone)),
+            _write_thread: thread::spawn(move || Self::write_thread_fn(stream, rx)),
         }
     }
 
-    pub fn send_message(&self, message: Message) {
-        self.tx.send(message).unwrap_or_else(|e| eprintln!("{e:?}"));
+    pub fn _send_message(&self, message: Message) {
+        self._tx
+            .send(message)
+            .unwrap_or_else(|e| eprintln!("{e:?}"));
     }
 
     fn read_thread_fn(stream: TcpStream) {
@@ -43,8 +45,8 @@ impl Peer {
                 Message::Election => todo!(),
                 Message::Okay => todo!(),
                 Message::Coordinator => todo!(),
-                Message::Add(lease) => todo!(),
-                Message::Update(lease) => todo!(),
+                Message::Add(_lease) => todo!(),
+                Message::Update(_lease) => todo!(),
             }
         }
     }

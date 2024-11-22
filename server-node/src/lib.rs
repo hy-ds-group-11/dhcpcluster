@@ -196,7 +196,7 @@ mod tests {
         cell::RefCell,
         collections::VecDeque,
         net::SocketAddr,
-        sync::{LazyLock, MutexGuard},
+        sync::{LazyLock, MutexGuard, PoisonError},
     };
 
     struct MockStreamRaw {
@@ -211,11 +211,17 @@ mod tests {
     }
 
     impl MockStream {
+        fn inner(&self) -> MutexGuard<MockStreamRaw> {
+            // Ignore mutex poisoning. TODO I am not sure what this does, but
+            // if tests become flaky, look here!
+            self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+
         fn send_replies(&mut self, sequence: &[Message]) {
             for message in sequence {
                 ciborium::into_writer::<Message, &mut VecDeque<u8>>(
                     message,
-                    &mut self.inner.lock().unwrap().reply_data,
+                    &mut self.inner().reply_data,
                 )
                 .unwrap();
             }
@@ -224,8 +230,7 @@ mod tests {
         fn get_messages(&mut self) -> Vec<Message> {
             // TODO refactor with iterators and collect
             let mut messages = Vec::new();
-            while let Ok(message) = ciborium::from_reader(&mut self.inner.lock().unwrap().sent_data)
-            {
+            while let Ok(message) = ciborium::from_reader(&mut self.inner().sent_data) {
                 messages.push(message);
             }
             messages
@@ -234,17 +239,17 @@ mod tests {
 
     impl Write for MockStream {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.inner.lock().unwrap().sent_data.write(buf)
+            self.inner().sent_data.write(buf)
         }
 
         fn flush(&mut self) -> std::io::Result<()> {
-            self.inner.lock().unwrap().sent_data.flush()
+            self.inner().sent_data.flush()
         }
     }
 
     impl Read for MockStream {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-            self.inner.lock().unwrap().reply_data.read(buf)
+            self.inner().reply_data.read(buf)
         }
     }
 
@@ -261,7 +266,7 @@ mod tests {
         }
 
         fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
-            *self.inner.lock().unwrap().read_timeout.borrow_mut() = dur;
+            *self.inner().read_timeout.borrow_mut() = dur;
             Ok(())
         }
 
@@ -273,16 +278,28 @@ mod tests {
     }
 
     // This global is used for gathering MockStreams from the server initialization during tests
+    // TODO there may be problems with running tests in parallel,
+    // consider running `cargo test -- --test-threads=1` as a workaround.
+    // Proper solution will use thread-local data.
     static STREAMS: LazyLock<Mutex<Vec<MockStream>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+    fn streams() -> MutexGuard<'static, Vec<MockStream>> {
+        STREAMS.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 
     // In tests where the MockStreams should reply to the server,
     // you must push the desired message sequences to this global.
+    // See [`push_reply_sequence`] for pushing message sequences.
     // Outer vec stores message sequences in the order of established connections,
     // Inner vec is the sequence of Messages
     static REPLIES: LazyLock<Mutex<Vec<Vec<Message>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 
+    fn replies() -> MutexGuard<'static, Vec<Vec<Message>>> {
+        REPLIES.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     pub fn push_stream(stream: impl MessageStream + 'static) {
-        let mut streams = STREAMS.lock().expect("STREAMS.lock() failed");
+        let mut streams = streams();
         let stream_index = streams.len();
 
         let stream: Box<dyn Any> = Box::new(stream.clone());
@@ -290,7 +307,7 @@ mod tests {
             .downcast::<MockStream>()
             .expect("Non-mock MessageStream used in tests"));
 
-        let replies = REPLIES.lock().expect("REPLIES.lock() failed");
+        let replies = replies();
         if let Some(sequence) = replies.get(stream_index) {
             stream.send_replies(sequence);
         }
@@ -299,15 +316,12 @@ mod tests {
     }
 
     fn with_streams<'a>(f: impl FnOnce(MutexGuard<'a, Vec<MockStream>>)) {
-        let lock = STREAMS.lock().expect("STREAMS.lock() failed");
+        let lock = streams();
         f(lock)
     }
 
     fn push_reply_sequence(sequence: Vec<Message>) {
-        REPLIES
-            .lock()
-            .expect("REPLIES.lock() failed")
-            .push(sequence)
+        replies().push(sequence)
     }
 
     #[test]
@@ -342,7 +356,7 @@ mod tests {
         with_streams(|mut streams| {
             assert_eq!(streams[0].get_messages(), vec![Message::Join(0)]);
             assert_eq!(streams.len(), 1);
-            let stream = streams[0].inner.lock().unwrap();
+            let stream = streams[0].inner();
             assert_eq!(
                 stream.connected,
                 Some("123.123.123.123:8909".parse().unwrap())

@@ -19,12 +19,8 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     - name: Install Rust
-      run: rustup default nightly
-    - name: Install clippy
-      run: rustup component add clippy
-    - name: Install rustfmt
-      run: rustup component add rustfmt
-    - name: Install cargo-llv-cov
+      run: rustup default nightly --component clippy --component rustfmt
+    - name: Install cargo-llvm-cov
       uses: taiki-e/install-action@cargo-llvm-cov
     - name: Set up cargo cache
       uses: actions/cache@v4

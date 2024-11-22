@@ -1,5 +1,7 @@
 # DHCP Cluster
 
+[![codecov](https://codecov.io/gh/hy-ds-group-11/dhcpcluster/graph/badge.svg?token=4NKHA2JMAB)](https://codecov.io/gh/hy-ds-group-11/dhcpcluster)
+
 A University of Helsinki **Distributed Systems** Course Project
 
 Fall 2024, Group 11

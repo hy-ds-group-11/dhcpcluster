@@ -65,3 +65,17 @@ a working initial implementation for a test suite.
 
 For the mocking to work, I had to use some Rust features that I have only learned very recently,
 such as the Any-trait and interior mutability with RefCell.
+
+## 2024-11-22
+
+Yesterday's testing patches turned out to be a little bit flawed.
+The issue is, that Rust tests are multithreaded, and using a global static to
+store mock data is just wrong, even when it's synchronized using a Mutex.
+We want each test to have its own global state.
+The issue was luckily quite simple to fix: Rust provides this really handly
+[thread_local](https://doc.rust-lang.org/std/macro.thread_local.html)-macro.
+
+There was also a very fun interaction with ChatGPT. I was refactoring a
+`while let Ok(...) = ... {vec.push(...)}` -pattern to use iterators and collect,
+and eventually ChatGPT found this very compact solution to achieve the desired
+result in a oneliner: [`iter::from_fn(... .ok()).collect()`](https://github.com/hy-ds-group-11/dhcpcluster/commit/00cce6a99c407c40429babedbf5f377942090194#diff-609918d0d40a13b735b34e0aee2a73421d1c55ed0c579a81366ea7da496eadb8R226)

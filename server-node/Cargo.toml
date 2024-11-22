@@ -10,3 +10,7 @@ ciborium = "0.2.2"
 serde = { version = "1.0.215", features = ["derive"] }
 toml = "0.8.19"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(coverage,coverage_nightly)',
+] }

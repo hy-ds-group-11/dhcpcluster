@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 use server_node::{config::Config, Cluster};
 use std::{
     error::Error,
@@ -5,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn main() -> Result<(), Box<dyn Error>> {
     let config_file_path: PathBuf = std::env::args_os()
         .nth(1)

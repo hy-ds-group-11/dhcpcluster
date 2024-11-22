@@ -1,3 +1,5 @@
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
 pub mod config;
 mod message;
 mod peer;
@@ -38,6 +40,8 @@ pub trait MessageStream: Read + Write + Send + Sized {
     }
 }
 
+// Disable coverage for TcpStream, testing is done with [`test::MockStream`]
+#[cfg_attr(coverage_nightly, coverage(off))]
 impl MessageStream for TcpStream {
     fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
         Self::connect(addr)

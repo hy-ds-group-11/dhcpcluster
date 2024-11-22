@@ -192,11 +192,7 @@ impl Server {
 mod tests {
     use super::*;
     use std::{
-        any::Any,
-        cell::RefCell,
-        collections::VecDeque,
-        net::SocketAddr,
-        sync::{LazyLock, MutexGuard, PoisonError},
+        any::Any, cell::RefCell, collections::VecDeque, iter, net::SocketAddr, sync::MutexGuard,
     };
 
     struct MockStreamRaw {
@@ -212,9 +208,7 @@ mod tests {
 
     impl MockStream {
         fn inner(&self) -> MutexGuard<MockStreamRaw> {
-            // Ignore mutex poisoning. TODO I am not sure what this does, but
-            // if tests become flaky, look here!
-            self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+            self.inner.lock().unwrap()
         }
 
         fn send_replies(&mut self, sequence: &[Message]) {
@@ -227,13 +221,9 @@ mod tests {
             }
         }
 
-        fn get_messages(&mut self) -> Vec<Message> {
-            // TODO refactor with iterators and collect
-            let mut messages = Vec::new();
-            while let Ok(message) = ciborium::from_reader(&mut self.inner().sent_data) {
-                messages.push(message);
-            }
-            messages
+        fn get_messages(&self) -> Vec<Message> {
+            let mut inner = self.inner();
+            iter::from_fn(|| ciborium::from_reader(&mut inner.sent_data).ok()).collect()
         }
     }
 
@@ -277,51 +267,47 @@ mod tests {
         }
     }
 
-    // This global is used for gathering MockStreams from the server initialization during tests
-    // TODO there may be problems with running tests in parallel,
-    // consider running `cargo test -- --test-threads=1` as a workaround.
-    // Proper solution will use thread-local data.
-    static STREAMS: LazyLock<Mutex<Vec<MockStream>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    thread_local! {
+        // This global is used for gathering MockStreams from the server initialization during tests
+        static STREAMS: RefCell<Vec<MockStream>> = const {RefCell::new(Vec::new())};
 
-    fn streams() -> MutexGuard<'static, Vec<MockStream>> {
-        STREAMS.lock().unwrap_or_else(PoisonError::into_inner)
+        // In tests where the MockStreams should reply to the server,
+        // you must push the desired message sequences to this global.
+        // See [`push_reply_sequence`] for pushing message sequences.
+        // Outer vec stores message sequences in the order of established connections,
+        // Inner vec is the sequence of Messages
+        static REPLIES: RefCell<Vec<Vec<Message>>> = const {RefCell::new(Vec::new())};
     }
 
-    // In tests where the MockStreams should reply to the server,
-    // you must push the desired message sequences to this global.
-    // See [`push_reply_sequence`] for pushing message sequences.
-    // Outer vec stores message sequences in the order of established connections,
-    // Inner vec is the sequence of Messages
-    static REPLIES: LazyLock<Mutex<Vec<Vec<Message>>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    fn with_streams(f: impl FnOnce(&mut Vec<MockStream>)) {
+        STREAMS.with_borrow_mut(f)
+    }
 
-    fn replies() -> MutexGuard<'static, Vec<Vec<Message>>> {
-        REPLIES.lock().unwrap_or_else(PoisonError::into_inner)
+    fn with_replies(f: impl FnOnce(&mut Vec<Vec<Message>>)) {
+        REPLIES.with_borrow_mut(f)
     }
 
     pub fn push_stream(stream: impl MessageStream + 'static) {
-        let mut streams = streams();
-        let stream_index = streams.len();
+        with_streams(|streams| {
+            with_replies(|replies| {
+                let stream_index = streams.len();
 
-        let stream: Box<dyn Any> = Box::new(stream.clone());
-        let mut stream = *(stream
-            .downcast::<MockStream>()
-            .expect("Non-mock MessageStream used in tests"));
+                let stream: Box<dyn Any> = Box::new(stream.clone());
+                let mut stream = *(stream
+                    .downcast::<MockStream>()
+                    .expect("Non-mock MessageStream used in tests"));
 
-        let replies = replies();
-        if let Some(sequence) = replies.get(stream_index) {
-            stream.send_replies(sequence);
-        }
+                if let Some(sequence) = replies.get(stream_index) {
+                    stream.send_replies(sequence);
+                }
 
-        streams.push(stream);
-    }
-
-    fn with_streams<'a>(f: impl FnOnce(MutexGuard<'a, Vec<MockStream>>)) {
-        let lock = streams();
-        f(lock)
+                streams.push(stream);
+            });
+        })
     }
 
     fn push_reply_sequence(sequence: Vec<Message>) {
-        replies().push(sequence)
+        with_replies(|replies| replies.push(sequence));
     }
 
     #[test]
@@ -353,13 +339,46 @@ mod tests {
         assert!(cluster.coordinator_id.is_none());
         assert!(cluster.server.leases.lock().unwrap().is_empty());
         assert_eq!(cluster.server.id, 0);
-        with_streams(|mut streams| {
+        with_streams(|streams| {
             assert_eq!(streams[0].get_messages(), vec![Message::Join(0)]);
             assert_eq!(streams.len(), 1);
             let stream = streams[0].inner();
             assert_eq!(
                 stream.connected,
                 Some("123.123.123.123:8909".parse().unwrap())
+            );
+        });
+    }
+
+    #[test]
+    fn cluster_connect_to_two_peers() {
+        push_reply_sequence(vec![Message::JoinAck(1)]);
+        push_reply_sequence(vec![Message::JoinAck(2)]);
+
+        let config = Config {
+            address_private: ([0u8; 4], 1234).into(),
+            peers: vec!["123.123.123.123:8909", "1.1.1.1:22"]
+                .into_iter()
+                .map(|s| s.parse().unwrap())
+                .collect(),
+            id: 0,
+        };
+        let cluster = Cluster::connect::<MockStream>(config);
+
+        assert!(cluster.coordinator_id.is_none());
+        assert!(cluster.server.leases.lock().unwrap().is_empty());
+        assert_eq!(cluster.server.id, 0);
+        with_streams(|streams| {
+            assert_eq!(streams[0].get_messages(), vec![Message::Join(0)]);
+            assert_eq!(streams[1].get_messages(), vec![Message::Join(0)]);
+            assert_eq!(streams.len(), 2);
+            assert_eq!(
+                streams[0].inner().connected,
+                Some("123.123.123.123:8909".parse().unwrap())
+            );
+            assert_eq!(
+                streams[1].inner().connected,
+                Some("1.1.1.1:22".parse().unwrap())
             );
         });
     }

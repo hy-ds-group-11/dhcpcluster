@@ -50,3 +50,18 @@ impl Config {
         Ok(conf.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::str::FromStr;
+
+    #[test]
+    fn empty_toml() {
+        let source = "";
+        // This should fail because there are non-optional fields
+        let conf = ConfigFile::from_str(source);
+        assert!(conf.is_err());
+    }
+}

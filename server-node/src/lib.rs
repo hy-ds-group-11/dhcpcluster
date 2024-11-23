@@ -16,24 +16,45 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-/// Describes all essential features that a message carrier such as [`std::net::TcpStream`] must have.
-///
-/// This trait is needed for mocking in tests.
-pub trait MessageStream: Read + Write + Send + Sized {
-    type Listener;
+// TODO move these traits to message module?
 
+/// A trait for listening to incoming connections
+pub trait MessageListener: Send + Sized {
+    type Stream: MessageStream;
+
+    fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self>;
+
+    fn incoming(&self) -> impl Iterator<Item = std::io::Result<Self::Stream>>;
+}
+
+// Disable coverage for TcpListener, testing is done with [`test::MockListener`]
+#[cfg_attr(coverage_nightly, coverage(off))]
+impl MessageListener for TcpListener {
+    type Stream = TcpStream;
+
+    fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+        Self::bind(addr)
+    }
+
+    fn incoming(&self) -> impl Iterator<Item = std::io::Result<Self::Stream>> {
+        self.incoming()
+    }
+}
+
+/// A trait for receiving and sending [`Message`]s.
+pub trait MessageStream: Read + Write + Send + Sized {
     fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self>;
 
     fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()>;
 
     fn clone(&self) -> Self;
 
-    /// Convenience method which reads and deserializes a message
+    /// Reads and deserializes a message
     fn receive_message(&mut self) -> Result<Message, ciborium::de::Error<std::io::Error>> {
         ciborium::from_reader::<Message, &mut Self>(self)
     }
 
-    /// Convenience method which serializes a message and writes it
+    /// Serializes and writes a message
     fn send_message(
         &mut self,
         message: &Message,
@@ -45,8 +66,6 @@ pub trait MessageStream: Read + Write + Send + Sized {
 // Disable coverage for TcpStream, testing is done with [`test::MockStream`]
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl MessageStream for TcpStream {
-    type Listener = TcpListener;
-
     fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
         Self::connect(addr)
     }
@@ -154,7 +173,7 @@ impl Cluster {
         }
     }
 
-    fn listen_nodes(&mut self, listener: TcpListener) {
+    fn listen_nodes(&mut self, listener: impl MessageListener + 'static) {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => self.answer_handshake(stream),
@@ -163,7 +182,10 @@ impl Cluster {
         }
     }
 
-    pub fn start_server(mut self, peer_listener: TcpListener) -> Result<(), Box<dyn Error>> {
+    pub fn start_server(
+        mut self,
+        peer_listener: impl MessageListener + 'static,
+    ) -> Result<(), Box<dyn Error>> {
         let peer_listener_thread = thread::spawn(move || self.listen_nodes(peer_listener));
 
         // TODO
@@ -202,7 +224,19 @@ mod tests {
         messages: Vec<Message>,
     }
 
-    pub struct MockListener {}
+    // pub struct MockListener {}
+
+    // impl MessageListener for MockListener {
+    //     type Stream = MockStream;
+
+    //     fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+    //         todo!()
+    //     }
+
+    //     fn incoming(&self) -> impl Iterator<Item = std::io::Result<Self::Stream>> {
+    //         todo!()
+    //     }
+    // }
 
     #[derive(Default)]
     struct MockStreamRaw {
@@ -255,8 +289,6 @@ mod tests {
     }
 
     impl MessageStream for MockStream {
-        type Listener = MockListener;
-
         fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
             // Parse the address
             let addr = addr.to_socket_addrs()?.next().unwrap();

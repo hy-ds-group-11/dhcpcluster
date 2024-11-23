@@ -20,6 +20,8 @@ use std::{
 ///
 /// This trait is needed for mocking in tests.
 pub trait MessageStream: Read + Write + Send + Sized {
+    type Listener;
+
     fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self>;
 
     fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()>;
@@ -43,6 +45,8 @@ pub trait MessageStream: Read + Write + Send + Sized {
 // Disable coverage for TcpStream, testing is done with [`test::MockStream`]
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl MessageStream for TcpStream {
+    type Listener = TcpListener;
+
     fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
         Self::connect(addr)
     }
@@ -83,10 +87,6 @@ impl Cluster {
         for peer_address in config.peers {
             match S::connect(peer_address) {
                 Ok(stream) => {
-                    // When testing, store established streams for inspection
-                    #[cfg(test)]
-                    tests::push_stream(stream.clone());
-
                     let result = Self::start_handshake(stream, config.id, &server);
                     match result {
                         Ok(peer) => peers.push(peer),
@@ -195,23 +195,25 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        any::Any, cell::RefCell, collections::VecDeque, iter, net::SocketAddr, sync::MutexGuard,
-    };
+    use std::{cell::RefCell, collections::VecDeque, iter, net::SocketAddr, sync::MutexGuard};
 
     struct MessageSequence {
         peer_addr: SocketAddr,
         messages: Vec<Message>,
     }
 
+    pub struct MockListener {}
+
+    #[derive(Default)]
     struct MockStreamRaw {
-        connected: Option<SocketAddr>,
+        connected: bool,
         read_timeout: RefCell<Option<Duration>>,
         sent_data: VecDeque<u8>,
         reply_data: VecDeque<u8>,
     }
 
     pub struct MockStream {
+        peer_addr: SocketAddr,
         inner: Arc<Mutex<MockStreamRaw>>,
     }
 
@@ -253,28 +255,23 @@ mod tests {
     }
 
     impl MessageStream for MockStream {
+        type Listener = MockListener;
+
         fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
             // Parse the address
-            let addr = addr.to_socket_addrs()?.next();
+            let addr = addr.to_socket_addrs()?.next().unwrap();
 
-            // Check if a message sequence has been defined for the peer.
-            // Construct a MockStream if defined, return ConnectionRefused, if not.
+            // Check if a stream has been defined for the peer.
+            // Return the MockStream if defined, return ConnectionRefused, if not.
             // TODO for an even fancier solution, we should develop a mechanism
             // to support multiple message sequences per peer address, i.e.
-            // if connect() is called repeatedly.
-            with_replies(
-                |replies| match replies.iter().find(|seq| Some(seq.peer_addr) == addr) {
-                    Some(replies) => {
-                        let mut stream = Self {
-                            inner: Arc::new(Mutex::new(MockStreamRaw {
-                                connected: addr,
-                                read_timeout: RefCell::new(None),
-                                sent_data: VecDeque::new(),
-                                reply_data: VecDeque::new(),
-                            })),
-                        };
-                        stream.send_replies(replies);
-                        Ok(stream)
+            // when connect() is called repeatedly.
+            with_streams(
+                |streams| match streams.iter().find(|stream| stream.peer_addr == addr) {
+                    Some(stream) => {
+                        assert!(!stream.inner().connected);
+                        stream.inner().connected = true;
+                        Ok(stream.clone())
                     }
                     None => Err(std::io::Error::new(
                         std::io::ErrorKind::ConnectionRefused,
@@ -291,6 +288,7 @@ mod tests {
 
         fn clone(&self) -> Self {
             Self {
+                peer_addr: self.peer_addr,
                 inner: Arc::clone(&self.inner),
             }
         }
@@ -298,19 +296,15 @@ mod tests {
 
     thread_local! {
         // This global is used for gathering MockStreams from the server initialization during tests
+        // See [`push_replies`] for setting up message sequences to the streams.
         static STREAMS: RefCell<Vec<MockStream>> = const {RefCell::new(Vec::new())};
-
-        // In tests where the MockStreams should reply to the server,
-        // you must push the desired message sequences to this global.
-        // See [`push_replies`] for setting up message sequences.
-        static REPLIES: RefCell<Vec<MessageSequence>> = const {RefCell::new(Vec::new())};
     }
 
     fn with_stream_of_peer<T>(key: SocketAddr, f: impl FnOnce(&MockStream) -> T) -> T {
         with_streams(|streams| -> T {
             let stream = streams
                 .iter()
-                .find(|stream| stream.inner().connected == Some(key))
+                .find(|stream| stream.peer_addr == key)
                 .expect("Tried to inspect stream with undefined peer in test");
             f(stream)
         })
@@ -320,22 +314,17 @@ mod tests {
         STREAMS.with_borrow_mut(f)
     }
 
-    fn with_replies<T>(f: impl FnOnce(&mut Vec<MessageSequence>) -> T) -> T {
-        REPLIES.with_borrow_mut(f)
-    }
-
-    pub fn push_stream(stream: impl MessageStream + 'static) {
-        with_streams(|streams| {
-            let stream: Box<dyn Any> = Box::new(stream.clone());
-            let stream = *(stream
-                .downcast::<MockStream>()
-                .expect("Non-mock MessageStream used in tests"));
-            streams.push(stream);
-        })
-    }
-
     fn push_replies(sequences: impl IntoIterator<Item = MessageSequence>) {
-        with_replies(|replies| replies.extend(sequences));
+        with_streams(|streams| {
+            for seq in sequences {
+                let mut stream = MockStream {
+                    peer_addr: seq.peer_addr,
+                    inner: Default::default(),
+                };
+                stream.send_replies(&seq);
+                streams.push(stream);
+            }
+        })
     }
 
     #[test]
@@ -376,7 +365,7 @@ mod tests {
             assert_eq!(streams[0].get_messages(), vec![Message::Join(0)]);
             assert_eq!(streams.len(), 1);
             let stream = streams[0].inner();
-            assert_eq!(stream.connected, Some(peer_1_addr));
+            assert!(stream.connected);
         });
     }
 
@@ -411,11 +400,11 @@ mod tests {
         });
         with_stream_of_peer(peer_1_addr, |stream| {
             assert_eq!(stream.get_messages(), vec![Message::Join(0)]);
-            assert_eq!(stream.inner().connected, Some(peer_1_addr));
+            assert!(stream.inner().connected);
         });
         with_stream_of_peer(peer_2_addr, |stream| {
             assert_eq!(stream.get_messages(), vec![Message::Join(0)]);
-            assert_eq!(stream.inner().connected, Some(peer_2_addr));
+            assert!(stream.inner().connected);
         });
     }
 

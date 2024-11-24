@@ -79,3 +79,16 @@ There was also a very fun interaction with ChatGPT. I was refactoring a
 `while let Ok(...) = ... {vec.push(...)}` -pattern to use iterators and collect,
 and eventually ChatGPT found this very compact solution to achieve the desired
 result in a oneliner: [`iter::from_fn(... .ok()).collect()`](https://github.com/hy-ds-group-11/dhcpcluster/commit/00cce6a99c407c40429babedbf5f377942090194#diff-609918d0d40a13b735b34e0aee2a73421d1c55ed0c579a81366ea7da496eadb8R226)
+
+## 2024-11-24
+
+I (Lauri) have been chipping away at testing. One nice thing you can do in Rust
+tests, is refer to file paths in the repository, because cargo sets the
+environment variable CARGO_MANIFEST_DIR which can be read to build paths to
+files such as configuration files during the test run.
+
+I'm concerned that when I start mocking `TcpListener`, the `thread_local`
+solution stops working, because the listener in in a separate thread and then
+won't see the preconfigured `MockStream`s. The solution then is to use a
+process-wide global again, but use unique `SocketAddr`esses or such identifiers
+so that tests running in parallel won't interact.

@@ -84,11 +84,13 @@ result in a oneliner: [`iter::from_fn(... .ok()).collect()`](https://github.com/
 
 I (Lauri) have been chipping away at testing. One nice thing you can do in Rust
 tests, is refer to file paths in the repository, because cargo sets the
-environment variable CARGO_MANIFEST_DIR which can be read to build paths to
-files such as configuration files during the test run.
+environment variable `CARGO_MANIFEST_DIR` which can be read in tests for
+building paths to files such as configuration files during the test run.
 
 I'm concerned that when I start mocking `TcpListener`, the `thread_local`
-solution stops working, because the listener in in a separate thread and then
-won't see the preconfigured `MockStream`s. The solution then is to use a
-process-wide global again, but use unique `SocketAddr`esses or such identifiers
-so that tests running in parallel won't interact.
+solution stops working, because the listener is in a separate thread and
+won't be able to access the preconfigured `MockStream`s.
+
+The solution then is to use a process-wide global again, but use unique
+`SocketAddr`esses or such identifiers so that tests running in parallel won't
+interact.

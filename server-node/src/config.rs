@@ -126,4 +126,10 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    #[should_panic(expected = "invalid value: integer `-100`, expected u32")]
+    fn load_test_file_2() {
+        Config::load_toml_file(tests_path("test2.toml")).unwrap();
+    }
 }

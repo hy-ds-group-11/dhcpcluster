@@ -9,7 +9,7 @@ use message::Message;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
-    io::{Read, Write},
+    io::{self, Read, Write},
     net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex},
     thread,
@@ -22,9 +22,9 @@ use std::{
 pub trait MessageListener: Send + Sized {
     type Stream: MessageStream;
 
-    fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self>;
+    fn bind(addr: impl ToSocketAddrs) -> io::Result<Self>;
 
-    fn incoming(&self) -> impl Iterator<Item = std::io::Result<Self::Stream>>;
+    fn incoming(&self) -> impl Iterator<Item = io::Result<Self::Stream>>;
 }
 
 // Disable coverage for TcpListener, testing is done with [`test::MockListener`]
@@ -32,33 +32,30 @@ pub trait MessageListener: Send + Sized {
 impl MessageListener for TcpListener {
     type Stream = TcpStream;
 
-    fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+    fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Self::bind(addr)
     }
 
-    fn incoming(&self) -> impl Iterator<Item = std::io::Result<Self::Stream>> {
+    fn incoming(&self) -> impl Iterator<Item = io::Result<Self::Stream>> {
         self.incoming()
     }
 }
 
 /// A trait for receiving and sending [`Message`]s.
 pub trait MessageStream: Read + Write + Send + Sized {
-    fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self>;
+    fn connect(addr: impl ToSocketAddrs) -> io::Result<Self>;
 
-    fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()>;
+    fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()>;
 
-    fn clone(&self) -> Self;
+    fn try_clone(&self) -> io::Result<Self>;
 
     /// Reads and deserializes a message
-    fn receive_message(&mut self) -> Result<Message, ciborium::de::Error<std::io::Error>> {
+    fn receive_message(&mut self) -> Result<Message, ciborium::de::Error<io::Error>> {
         ciborium::from_reader::<Message, &mut Self>(self)
     }
 
     /// Serializes and writes a message
-    fn send_message(
-        &mut self,
-        message: &Message,
-    ) -> Result<(), ciborium::ser::Error<std::io::Error>> {
+    fn send_message(&mut self, message: &Message) -> Result<(), ciborium::ser::Error<io::Error>> {
         ciborium::into_writer::<Message, &mut Self>(message, self)
     }
 }
@@ -66,16 +63,16 @@ pub trait MessageStream: Read + Write + Send + Sized {
 // Disable coverage for TcpStream, testing is done with [`test::MockStream`]
 #[cfg_attr(coverage_nightly, coverage(off))]
 impl MessageStream for TcpStream {
-    fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+    fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
         Self::connect(addr)
     }
 
-    fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
+    fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
         self.set_read_timeout(dur)
     }
 
-    fn clone(&self) -> Self {
-        self.try_clone().unwrap()
+    fn try_clone(&self) -> io::Result<Self> {
+        self.try_clone()
     }
 }
 
@@ -217,26 +214,71 @@ impl Server {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{cell::RefCell, collections::VecDeque, iter, net::SocketAddr, sync::MutexGuard};
+    use std::{cell::RefCell, collections::VecDeque, io, iter, net::SocketAddr, sync::MutexGuard};
 
     struct MessageSequence {
         peer_addr: SocketAddr,
         messages: Vec<Message>,
     }
 
-    // pub struct MockListener {}
+    type IncomingConnection = (Duration, Result<MockStream, io::ErrorKind>);
 
-    // impl MessageListener for MockListener {
-    //     type Stream = MockStream;
+    pub struct MockListener {
+        #[allow(dead_code)]
+        local_addr: SocketAddr,
+        incoming_streams: Arc<Mutex<Vec<IncomingConnection>>>,
+        handled_streams: Arc<Mutex<Vec<MockStream>>>,
+    }
 
-    //     fn bind(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
-    //         todo!()
-    //     }
+    impl MockListener {
+        fn push_streams(
+            &mut self,
+            streams: impl Iterator<Item = (Duration, Result<MockStream, io::ErrorKind>)>,
+        ) {
+            self.incoming_streams.lock().unwrap().extend(streams);
+        }
+    }
 
-    //     fn incoming(&self) -> impl Iterator<Item = std::io::Result<Self::Stream>> {
-    //         todo!()
-    //     }
-    // }
+    impl Clone for MockListener {
+        fn clone(&self) -> Self {
+            Self {
+                local_addr: self.local_addr,
+                incoming_streams: Arc::clone(&self.incoming_streams),
+                handled_streams: Arc::clone(&self.handled_streams),
+            }
+        }
+    }
+
+    impl MessageListener for MockListener {
+        type Stream = MockStream;
+
+        fn bind(addr: impl ToSocketAddrs) -> io::Result<Self> {
+            let local_addr = addr.to_socket_addrs()?.next().ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "No addresses found")
+            })?;
+            Ok(Self {
+                local_addr,
+                incoming_streams: Arc::new(Mutex::new(Vec::new())),
+                handled_streams: Arc::new(Mutex::new(Vec::new())),
+            })
+        }
+
+        fn incoming(&self) -> impl Iterator<Item = io::Result<Self::Stream>> {
+            let streams = Arc::clone(&self.incoming_streams);
+            std::iter::from_fn(move || {
+                let mut streams = streams.lock().unwrap();
+                if let Some((delay, result)) = streams.pop() {
+                    thread::sleep(delay);
+                    if let Ok(stream) = &result {
+                        self.handled_streams.lock().unwrap().push(stream.clone());
+                    }
+                    Some(result.map_err(|kind| io::Error::new(kind, "Mock error")))
+                } else {
+                    None
+                }
+            })
+        }
+    }
 
     #[derive(Default)]
     struct MockStreamRaw {
@@ -273,23 +315,23 @@ mod tests {
     }
 
     impl Write for MockStream {
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             self.inner().sent_data.write(buf)
         }
 
-        fn flush(&mut self) -> std::io::Result<()> {
+        fn flush(&mut self) -> io::Result<()> {
             self.inner().sent_data.flush()
         }
     }
 
     impl Read for MockStream {
-        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             self.inner().reply_data.read(buf)
         }
     }
 
     impl MessageStream for MockStream {
-        fn connect(addr: impl ToSocketAddrs) -> std::io::Result<Self> {
+        fn connect(addr: impl ToSocketAddrs) -> io::Result<Self> {
             // Parse the address
             let addr = addr.to_socket_addrs()?.next().unwrap();
 
@@ -305,24 +347,30 @@ mod tests {
                         stream.inner().connected = true;
                         Ok(stream.clone())
                     }
-                    None => Err(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionRefused,
+                    None => Err(io::Error::new(
+                        io::ErrorKind::ConnectionRefused,
                         "Connection refused by peer",
                     )),
                 },
             )
         }
 
-        fn set_read_timeout(&self, dur: Option<Duration>) -> std::io::Result<()> {
+        fn set_read_timeout(&self, dur: Option<Duration>) -> io::Result<()> {
             *self.inner().read_timeout.borrow_mut() = dur;
             Ok(())
         }
 
-        fn clone(&self) -> Self {
-            Self {
+        fn try_clone(&self) -> Result<MockStream, io::Error> {
+            Ok(Self {
                 peer_addr: self.peer_addr,
                 inner: Arc::clone(&self.inner),
-            }
+            })
+        }
+    }
+
+    impl Clone for MockStream {
+        fn clone(&self) -> Self {
+            MessageStream::try_clone(self).unwrap()
         }
     }
 
@@ -457,5 +505,59 @@ mod tests {
 
         assert!(cluster.peers.is_empty());
         with_streams(|streams| assert!(streams.is_empty()));
+    }
+
+    #[test]
+    #[should_panic(expected = "Node listener thread panicked")]
+    fn cluster_handle_incoming_peer_no_messages() {
+        let server_addr = "127.0.0.1:1234".parse().unwrap();
+        let peer_addr = "127.0.0.2:4321".parse().unwrap();
+        let mut seq1 = MockStream {
+            peer_addr,
+            inner: Default::default(),
+        };
+        seq1.send_replies(&MessageSequence {
+            peer_addr,
+            messages: vec![],
+        });
+        let mut listener = MockListener::bind(server_addr).unwrap();
+        listener.push_streams(vec![(Duration::from_millis(100), Ok(seq1))].into_iter());
+
+        let config = Config {
+            address_private: server_addr,
+            peers: vec![peer_addr],
+            id: 0,
+        };
+        let cluster = Cluster::connect::<MockStream>(config);
+        cluster.start_server(listener).unwrap();
+    }
+
+    #[test]
+    fn cluster_handle_incoming_handshake_from_one_peer() {
+        let server_addr = "127.0.0.1:1234".parse().unwrap();
+        let peer_addr = "127.0.0.2:4321".parse().unwrap();
+        let mut seq1 = MockStream {
+            peer_addr,
+            inner: Default::default(),
+        };
+        seq1.send_replies(&MessageSequence {
+            peer_addr: server_addr,
+            messages: vec![Message::Join(1)],
+        });
+        let mut listener = MockListener::bind(server_addr).unwrap();
+        listener.push_streams(vec![(Duration::from_millis(100), Ok(seq1))].into_iter());
+
+        let config = Config {
+            address_private: server_addr,
+            peers: vec![peer_addr],
+            id: 0,
+        };
+        let cluster = Cluster::connect::<MockStream>(config);
+        cluster.start_server(listener.clone()).unwrap();
+
+        let mut handled = listener.handled_streams.lock().unwrap();
+        let mut server_replies = handled.pop().unwrap().get_messages();
+        assert_eq!(server_replies.len(), 1);
+        assert_eq!(server_replies.pop().unwrap(), Message::JoinAck(0));
     }
 }

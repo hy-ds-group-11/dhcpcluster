@@ -18,7 +18,7 @@ impl Peer {
         println!("Started connection to peer with id {id}");
         let (tx, rx) = mpsc::channel::<Message>();
 
-        let stream_read = stream.clone();
+        let stream_read = stream.try_clone().unwrap();
         let stream_write = stream;
         Self {
             _id: id,

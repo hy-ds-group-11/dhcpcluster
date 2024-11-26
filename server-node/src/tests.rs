@@ -9,7 +9,7 @@ use std::{
     collections::VecDeque,
     io::{self, Read, Write},
     iter,
-    net::{SocketAddr, ToSocketAddrs},
+    net::{SocketAddr, SocketAddrV4, ToSocketAddrs},
     sync::MutexGuard,
 };
 
@@ -91,6 +91,15 @@ pub struct MockStream {
 }
 
 impl MockStream {
+    fn new(seq: &MessageSequence) -> Self {
+        let mut stream = Self {
+            peer_addr: seq.peer_addr,
+            inner: Default::default(),
+        };
+        stream.send_replies(seq);
+        stream
+    }
+
     fn inner(&self) -> MutexGuard<MockStreamRaw> {
         self.inner.lock().unwrap()
     }
@@ -194,14 +203,49 @@ fn with_streams<T>(f: impl FnOnce(&mut Vec<MockStream>) -> T) -> T {
 fn push_replies(sequences: impl IntoIterator<Item = MessageSequence>) {
     with_streams(|streams| {
         for seq in sequences {
-            let mut stream = MockStream {
-                peer_addr: seq.peer_addr,
-                inner: Default::default(),
-            };
-            stream.send_replies(&seq);
-            streams.push(stream);
+            streams.push(MockStream::new(&seq));
         }
     })
+}
+
+fn generate_localhost_addresses(n: u32) -> Vec<SocketAddr> {
+    (0..n)
+        .into_iter()
+        .map(|nth| {
+            let ip = Ipv4Addr::from_bits(std::net::Ipv4Addr::LOCALHOST.to_bits() + nth);
+            SocketAddr::V4(SocketAddrV4::new(ip, 4321))
+        })
+        .collect()
+}
+
+fn cluster_connect_to_n_peers(n: u32) {
+    let peer_addrs = generate_localhost_addresses(n);
+    for (id, peer_addr) in peer_addrs.iter().enumerate() {
+        push_replies(vec![MessageSequence {
+            peer_addr: *peer_addr,
+            messages: vec![Message::JoinAck(id as u32 + 1)],
+        }]);
+    }
+
+    let config = Config {
+        address_private: ([0u8; 4], 1234).into(),
+        peers: peer_addrs.clone(),
+        id: 0,
+    };
+    let cluster = Cluster::connect::<MockStream>(config);
+
+    assert!(cluster.coordinator_id.is_none());
+    assert!(cluster.server.leases.lock().unwrap().is_empty());
+    assert_eq!(cluster.server.id, 0);
+    with_streams(|streams| {
+        assert_eq!(streams.len(), n.try_into().unwrap());
+    });
+    for peer_addr in peer_addrs {
+        with_stream_of_peer(peer_addr, |stream| {
+            assert_eq!(stream.get_messages(), vec![Message::Join(0)]);
+            assert!(stream.inner().connected);
+        });
+    }
 }
 
 #[test]
@@ -221,71 +265,18 @@ fn cluster_connect_to_no_peers() {
 
 #[test]
 fn cluster_connect_to_one_peer() {
-    let peer_1_addr = "123.123.123.123:8909".parse().unwrap();
-
-    push_replies(vec![MessageSequence {
-        peer_addr: peer_1_addr,
-        messages: vec![Message::JoinAck(1)],
-    }]);
-
-    let config = Config {
-        address_private: ([0u8; 4], 1234).into(),
-        peers: vec![peer_1_addr],
-        id: 0,
-    };
-    let cluster = Cluster::connect::<MockStream>(config);
-
-    assert!(cluster.coordinator_id.is_none());
-    assert!(cluster.server.leases.lock().unwrap().is_empty());
-    assert_eq!(cluster.server.id, 0);
-    with_streams(|streams| {
-        assert_eq!(streams[0].get_messages(), vec![Message::Join(0)]);
-        assert_eq!(streams.len(), 1);
-        let stream = streams[0].inner();
-        assert!(stream.connected);
-    });
+    cluster_connect_to_n_peers(1);
 }
 
 #[test]
 fn cluster_connect_to_two_peers() {
-    let peer_1_addr = "123.123.123.123:8909".parse().unwrap();
-    let peer_2_addr = "1.1.1.1:22".parse().unwrap();
-
-    push_replies(vec![
-        MessageSequence {
-            peer_addr: peer_1_addr,
-            messages: vec![Message::JoinAck(1)],
-        },
-        MessageSequence {
-            peer_addr: peer_2_addr,
-            messages: vec![Message::JoinAck(2)],
-        },
-    ]);
-
-    let config = Config {
-        address_private: ([0u8; 4], 1234).into(),
-        peers: vec![peer_1_addr, peer_2_addr],
-        id: 0,
-    };
-    let cluster = Cluster::connect::<MockStream>(config);
-
-    assert!(cluster.coordinator_id.is_none());
-    assert!(cluster.server.leases.lock().unwrap().is_empty());
-    assert_eq!(cluster.server.id, 0);
-    with_streams(|streams| {
-        assert_eq!(streams.len(), 2);
-    });
-    with_stream_of_peer(peer_1_addr, |stream| {
-        assert_eq!(stream.get_messages(), vec![Message::Join(0)]);
-        assert!(stream.inner().connected);
-    });
-    with_stream_of_peer(peer_2_addr, |stream| {
-        assert_eq!(stream.get_messages(), vec![Message::Join(0)]);
-        assert!(stream.inner().connected);
-    });
+    cluster_connect_to_n_peers(2);
 }
 
-// TODO refactor repeated test logic to function
+#[test]
+fn cluster_connect_to_thousand_peers() {
+    cluster_connect_to_n_peers(1024);
+}
 
 #[test]
 fn cluster_connect_to_offline_peer() {
@@ -309,16 +300,12 @@ fn cluster_connect_to_offline_peer() {
 fn cluster_handle_incoming_peer_no_messages() {
     let server_addr = "127.0.0.1:1234".parse().unwrap();
     let peer_addr = "127.0.0.2:4321".parse().unwrap();
-    let mut seq1 = MockStream {
-        peer_addr,
-        inner: Default::default(),
-    };
-    seq1.send_replies(&MessageSequence {
+    let stream1 = MockStream::new(&MessageSequence {
         peer_addr,
         messages: vec![],
     });
     let mut listener = MockListener::bind(server_addr).unwrap();
-    listener.push_streams(vec![(Duration::from_millis(100), Ok(seq1))].into_iter());
+    listener.push_streams(vec![(Duration::from_millis(100), Ok(stream1))].into_iter());
 
     let config = Config {
         address_private: server_addr,
@@ -329,31 +316,47 @@ fn cluster_handle_incoming_peer_no_messages() {
     cluster.start_server(listener).unwrap();
 }
 
-#[test]
-fn cluster_handle_incoming_handshake_from_one_peer() {
+fn cluster_handle_incoming_handshake_from_n_peers(n: u32) {
     let server_addr = "127.0.0.1:1234".parse().unwrap();
-    let peer_addr = "127.0.0.2:4321".parse().unwrap();
-    let mut seq1 = MockStream {
-        peer_addr,
-        inner: Default::default(),
-    };
-    seq1.send_replies(&MessageSequence {
-        peer_addr: server_addr,
-        messages: vec![Message::Join(1)],
-    });
+    let peer_addresses = generate_localhost_addresses(n);
+    let streams: Vec<MockStream> = peer_addresses
+        .iter()
+        .enumerate()
+        .map(|(id, peer_addr)| {
+            MockStream::new(&MessageSequence {
+                peer_addr: *peer_addr,
+                messages: vec![Message::Join(id as u32 + 1)],
+            })
+        })
+        .collect();
     let mut listener = MockListener::bind(server_addr).unwrap();
-    listener.push_streams(vec![(Duration::from_millis(100), Ok(seq1))].into_iter());
-
+    listener.push_streams(
+        streams
+            .into_iter()
+            .map(|stream| (Duration::from_millis(0), Ok(stream))),
+    );
     let config = Config {
         address_private: server_addr,
-        peers: vec![peer_addr],
+        peers: peer_addresses,
         id: 0,
     };
     let cluster = Cluster::connect::<MockStream>(config);
     cluster.start_server(listener.clone()).unwrap();
 
-    let mut handled = listener.handled_streams.lock().unwrap();
-    let mut server_replies = handled.pop().unwrap().get_messages();
-    assert_eq!(server_replies.len(), 1);
-    assert_eq!(server_replies.pop().unwrap(), Message::JoinAck(0));
+    let handled = listener.handled_streams.lock().unwrap();
+    assert_eq!(handled.len(), n.try_into().unwrap());
+    for server_replies in handled.iter().map(|stream| stream.get_messages()) {
+        assert_eq!(server_replies.len(), 1);
+        assert_eq!(server_replies[0], Message::JoinAck(0));
+    }
+}
+
+#[test]
+fn cluster_handle_incoming_handshake_from_one_peer() {
+    cluster_handle_incoming_handshake_from_n_peers(1);
+}
+
+#[test]
+fn cluster_handle_incoming_handshake_from_thousand_peers() {
+    cluster_handle_incoming_handshake_from_n_peers(1024);
 }

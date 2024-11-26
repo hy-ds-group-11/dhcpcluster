@@ -21,3 +21,4 @@ The software is currently _unimplemented_, but development work has started.
 | [45](doc/week45.md) | Initial planning and specification :busts_in_silhouette::speech_balloon: |
 | [46](doc/week46.md) | Design, documentation :closed_book: and server code :rocket: |
 | [47](doc/week47.md) | Server handshakes :raised_hands:, testing :white_check_mark: and groundwork |
+| [48](doc/week48.md) | Under construction :construction: |

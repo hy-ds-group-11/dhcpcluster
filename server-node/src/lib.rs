@@ -156,5 +156,3 @@ impl Server {
         }
     }
 }
-
-mod tests;

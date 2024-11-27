@@ -6,12 +6,18 @@ use std::{
 
 use crate::{message::Message, MessageStream, SharedState};
 
+enum InternalMessage {
+    Terminate,
+    Relay(Message),
+}
+
 /// Peer connection
+#[allow(dead_code)]
 pub struct Peer {
-    _id: u32,
-    _tx: Sender<Message>,
-    _read_thread: JoinHandle<()>,
-    _write_thread: JoinHandle<()>,
+    id: u32,
+    tx: Sender<InternalMessage>,
+    read_thread: JoinHandle<()>,
+    write_thread: JoinHandle<()>,
 }
 
 impl Peer {
@@ -22,56 +28,94 @@ impl Peer {
         heartbeat_timeout: Duration,
     ) -> Self {
         println!("Started connection to peer with id {id}");
-        let (tx, rx) = mpsc::channel::<Message>();
+        let (tx, rx) = mpsc::channel::<InternalMessage>();
 
         let stream_read = stream.try_clone().unwrap();
+        // Set read to timeout if three heartbeats are missed. Three was chosen arbitrarily
+        stream_read
+            .set_read_timeout(Some(3 * heartbeat_timeout))
+            .expect("set_read_timeout call failed");
+
         let stream_write = stream;
         Self {
-            _id: id,
-            _tx: tx,
-            _read_thread: thread::spawn(move || Self::read_thread_fn(stream_read, shared_state)),
-            _write_thread: thread::spawn(move || {
+            id,
+            tx: tx.clone(),
+            read_thread: thread::spawn(move || {
+                Self::read_thread_fn(stream_read, id, tx, shared_state)
+            }),
+            write_thread: thread::spawn(move || {
                 Self::write_thread_fn(stream_write, rx, heartbeat_timeout)
             }),
         }
     }
 
-    pub fn _send_message(&self, message: Message) {
-        self._tx
-            .send(message)
+    #[allow(dead_code)]
+    pub fn send_message(&self, message: Message) {
+        self.tx
+            .send(InternalMessage::Relay(message))
             .unwrap_or_else(|e| eprintln!("{e:?}"));
     }
 
-    fn read_thread_fn(mut stream: impl MessageStream, shared_state: SharedState) {
+    fn read_thread_fn(
+        mut stream: impl MessageStream,
+        id: u32,
+        tx: Sender<InternalMessage>,
+        shared_state: SharedState,
+    ) {
         use Message::*;
         loop {
-            let message = stream.receive_message().unwrap();
-            dbg!(&message);
-            match message {
-                Join(_) => panic!("Peer tried to send Join message after handshake"),
-                JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
-                Heartbeat => println!("Heartbeat"),
-                Election => todo!(),
-                Okay => todo!(),
-                Coordinator => todo!(),
-                Add(lease) => {
-                    // TODO: checks needed for the lease
-                    shared_state.leases.lock().unwrap().push(lease);
+            let result = stream.receive_message();
+
+            if let Ok(message) = result {
+                dbg!(&message);
+                match message {
+                    Join(_) => panic!("Peer tried to send Join message after handshake"),
+                    JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
+                    Heartbeat => println!("Heartbeat"),
+                    Election => todo!(),
+                    Okay => todo!(),
+                    Coordinator => todo!(),
+                    Add(lease) => {
+                        // TODO: checks needed for the lease
+                        shared_state.leases.lock().unwrap().push(lease);
+                    }
+                    Update(_lease) => todo!(),
                 }
-                Update(_lease) => todo!(),
+            } else {
+                tx.send(InternalMessage::Terminate)
+                    .expect("Thread internal messaging failed!");
+                shared_state
+                    .peers
+                    .lock()
+                    .unwrap()
+                    .retain(|peer| peer.id != id);
+                break;
             }
         }
+        println!("Connection to peer {id} lost");
     }
 
-    fn write_thread_fn(mut stream: impl MessageStream, rx: Receiver<Message>, timeout: Duration) {
+    fn write_thread_fn(
+        mut stream: impl MessageStream,
+        rx: Receiver<InternalMessage>,
+        timeout: Duration,
+    ) {
+        use InternalMessage::*;
         loop {
             let receive = rx.recv_timeout(timeout);
-            if let Ok(message) = receive {
-                stream
-                    .send_message(&message)
-                    .unwrap_or_else(|e| eprintln!("{e:?}"));
-            } else {
+
+            if receive.is_err() {
                 let _ = stream.send_message(&Message::Heartbeat);
+                continue;
+            }
+
+            match receive.unwrap() {
+                Relay(message) => {
+                    stream
+                        .send_message(&message)
+                        .unwrap_or_else(|e| eprintln!("{e:?}"));
+                }
+                Terminate => break,
             }
         }
     }

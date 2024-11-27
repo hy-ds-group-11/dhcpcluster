@@ -3,6 +3,19 @@
 
 #![cfg(test)]
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            address_private: SocketAddr::V4(std::net::SocketAddrV4::new(
+                std::net::Ipv4Addr::LOCALHOST,
+                1234,
+            )),
+            peers: Vec::new(),
+            id: 0,
+        }
+    }
+}
+
 use super::*;
 use std::{
     cell::RefCell,
@@ -227,11 +240,11 @@ fn cluster_connect_to_n_peers(n: u32) {
         }]);
     }
 
-    let config = Config {
-        address_private: ([0u8; 4], 1234).into(),
-        peers: peer_addrs.clone(),
-        id: 0,
-    };
+    let mut config = Config::default();
+    config.address_private = ([0u8; 4], 1234).into();
+    config.peers = peer_addrs.clone();
+    config.id = 0;
+
     let cluster = Cluster::connect::<MockStream>(config);
 
     assert!(cluster.coordinator_id.is_none());
@@ -250,11 +263,11 @@ fn cluster_connect_to_n_peers(n: u32) {
 
 #[test]
 fn cluster_connect_to_no_peers() {
-    let config = Config {
-        address_private: ([0u8; 4], 1234).into(),
-        peers: vec![],
-        id: 0,
-    };
+    let mut config = Config::default();
+    config.address_private = ([0u8; 4], 1234).into();
+    config.peers = vec![];
+    config.id = 0;
+
     let cluster = Cluster::connect::<MockStream>(config);
     assert!(cluster.peers.is_empty());
     assert!(cluster.coordinator_id.is_none());
@@ -284,11 +297,11 @@ fn cluster_connect_to_offline_peer() {
 
     // push_replies omitted
 
-    let config = Config {
-        address_private: ([0u8; 4], 1234).into(),
-        peers: vec![peer_1_addr],
-        id: 0,
-    };
+    let mut config = Config::default();
+    config.address_private = ([0u8; 4], 1234).into();
+    config.peers = vec![peer_1_addr];
+    config.id = 0;
+
     let cluster = Cluster::connect::<MockStream>(config);
 
     assert!(cluster.peers.is_empty());
@@ -307,11 +320,11 @@ fn cluster_handle_incoming_peer_no_messages() {
     let mut listener = MockListener::bind(server_addr).unwrap();
     listener.push_streams(vec![(Duration::from_millis(100), Ok(stream1))].into_iter());
 
-    let config = Config {
-        address_private: server_addr,
-        peers: vec![peer_addr],
-        id: 0,
-    };
+    let mut config = Config::default();
+    config.address_private = server_addr;
+    config.peers = vec![peer_addr];
+    config.id = 0;
+
     let cluster = Cluster::connect::<MockStream>(config);
     cluster.start_server(listener).unwrap();
 }
@@ -335,11 +348,12 @@ fn cluster_handle_incoming_handshake_from_n_peers(n: u32) {
             .into_iter()
             .map(|stream| (Duration::from_millis(0), Ok(stream))),
     );
-    let config = Config {
-        address_private: server_addr,
-        peers: peer_addresses,
-        id: 0,
-    };
+
+    let mut config = Config::default();
+    config.address_private = server_addr;
+    config.peers = peer_addresses;
+    config.id = 0;
+
     let cluster = Cluster::connect::<MockStream>(config);
     cluster.start_server(listener.clone()).unwrap();
 

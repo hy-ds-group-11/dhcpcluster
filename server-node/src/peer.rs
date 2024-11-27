@@ -69,9 +69,10 @@ impl Peer {
             if let Ok(message) = result {
                 dbg!(&message);
                 match message {
-                    Join(_) => panic!("Peer tried to send Join message after handshake"),
-                    JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
-                    Heartbeat => println!("Heartbeat"),
+                    Join(_) | JoinAck(_) => {
+                        panic!("Peer {id} tried to send {message:?} after handshake")
+                    }
+                    Heartbeat => println!("Received heartbeat from {id}"),
                     Election => todo!(),
                     Okay => todo!(),
                     Coordinator => todo!(),

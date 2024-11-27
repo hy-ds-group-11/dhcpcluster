@@ -309,7 +309,7 @@ fn cluster_connect_to_offline_peer() {
 }
 
 #[test]
-#[should_panic(expected = "Node listener thread panicked")]
+#[should_panic(expected = "Node listener thread panicked")] // TODO: should NOT panic
 fn cluster_handle_incoming_peer_no_messages() {
     let server_addr = "127.0.0.1:1234".parse().unwrap();
     let peer_addr = "127.0.0.2:4321".parse().unwrap();

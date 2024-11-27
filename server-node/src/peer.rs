@@ -1,6 +1,7 @@
 use std::{
     sync::mpsc::{self, Receiver, Sender},
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use crate::{message::Message, Leases, MessageStream};
@@ -14,7 +15,12 @@ pub struct Peer {
 }
 
 impl Peer {
-    pub fn new(stream: impl MessageStream + 'static, id: u32, leases: Leases) -> Self {
+    pub fn new(
+        stream: impl MessageStream + 'static,
+        id: u32,
+        leases: Leases,
+        heartbeat_timeout: Duration,
+    ) -> Self {
         println!("Started connection to peer with id {id}");
         let (tx, rx) = mpsc::channel::<Message>();
 
@@ -24,7 +30,9 @@ impl Peer {
             _id: id,
             _tx: tx,
             _read_thread: thread::spawn(move || Self::read_thread_fn(stream_read, leases)),
-            _write_thread: thread::spawn(move || Self::write_thread_fn(stream_write, rx)),
+            _write_thread: thread::spawn(move || {
+                Self::write_thread_fn(stream_write, rx, heartbeat_timeout)
+            }),
         }
     }
 
@@ -41,7 +49,7 @@ impl Peer {
             match message {
                 Message::Join(_) => panic!("Peer tried to send Join message after handshake"),
                 Message::JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
-                Message::Heartbeat => todo!(),
+                Message::Heartbeat => println!("Heartbeat"),
                 Message::Election => todo!(),
                 Message::Okay => todo!(),
                 Message::Coordinator => todo!(),
@@ -54,11 +62,16 @@ impl Peer {
         }
     }
 
-    fn write_thread_fn(mut stream: impl MessageStream, rx: Receiver<Message>) {
-        for message in rx {
-            stream
-                .send_message(&message)
-                .unwrap_or_else(|e| eprintln!("{e:?}"));
+    fn write_thread_fn(mut stream: impl MessageStream, rx: Receiver<Message>, timeout: Duration) {
+        loop {
+            let receive = rx.recv_timeout(timeout);
+            if let Ok(message) = receive {
+                stream
+                    .send_message(&message)
+                    .unwrap_or_else(|e| eprintln!("{e:?}"));
+            } else {
+                let _ = stream.send_message(&Message::Heartbeat);
+            }
         }
     }
 }

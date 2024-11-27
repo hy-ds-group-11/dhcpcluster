@@ -1,3 +1,4 @@
 address_private = "0.0.0.0:1234"
 id = 0
 peers = []
+heartbeat_timeout = 2000

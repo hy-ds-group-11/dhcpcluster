@@ -74,9 +74,12 @@ impl Cluster {
                 stream.set_read_timeout(None).unwrap();
 
                 match dbg!(message) {
-                    Message::JoinAck(peer_id) => {
-                        Ok(Peer::new(stream, peer_id, Arc::clone(&server.leases)))
-                    }
+                    Message::JoinAck(peer_id) => Ok(Peer::new(
+                        stream,
+                        peer_id,
+                        Arc::clone(&server.leases),
+                        server.config.heartbeat_timeout,
+                    )),
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
                 }
             }
@@ -98,10 +101,12 @@ impl Cluster {
             Message::Join(id) => {
                 let result = stream.send_message(&Message::JoinAck(self.server.id));
                 match result {
-                    Ok(_) => {
-                        self.peers
-                            .push(Peer::new(stream, id, Arc::clone(&self.server.leases)))
-                    }
+                    Ok(_) => self.peers.push(Peer::new(
+                        stream,
+                        id,
+                        Arc::clone(&self.server.leases),
+                        self.server.config.heartbeat_timeout,
+                    )),
                     Err(e) => eprintln!("{e:?}"),
                 }
             }
@@ -139,6 +144,7 @@ impl Cluster {
 pub struct Server {
     id: u32,
     leases: Leases,
+    config: Config,
 }
 
 impl Server {
@@ -146,6 +152,7 @@ impl Server {
         Self {
             id: config.id,
             leases: Arc::new(Mutex::new(Vec::new())),
+            config: config.clone(),
         }
     }
 }

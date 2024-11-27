@@ -1,11 +1,12 @@
 use serde::Deserialize;
-use std::{error::Error, ffi::OsStr, net::SocketAddr, path::Path, str::FromStr};
+use std::{error::Error, ffi::OsStr, net::SocketAddr, path::Path, str::FromStr, time::Duration};
 
 #[derive(Deserialize, Debug)]
 struct ConfigFile {
     address_private: SocketAddr,
     peers: Vec<SocketAddr>,
     id: u32,
+    heartbeat_timeout: u64,
     // TODO DHCP interface?
 }
 
@@ -17,11 +18,12 @@ impl FromStr for ConfigFile {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub address_private: SocketAddr,
     pub peers: Vec<SocketAddr>,
     pub id: u32,
+    pub heartbeat_timeout: Duration,
 }
 
 impl From<ConfigFile> for Config {
@@ -33,12 +35,14 @@ impl From<ConfigFile> for Config {
             address_private,
             peers,
             id,
+            heartbeat_timeout,
         }: ConfigFile,
     ) -> Self {
         Self {
             address_private,
             peers,
             id,
+            heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
         }
     }
 }

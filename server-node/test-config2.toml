@@ -1,0 +1,4 @@
+address_private = "0.0.0.0:1236"
+id = 1
+peers = ["0.0.0.0:1234", "0.0.0.0:1235"]
+heartbeat_timeout = 2000

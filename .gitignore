@@ -10,5 +10,4 @@ target/
 **/*.rs.bk
 
 # Custom rules
-test-config*.toml
 *.profraw

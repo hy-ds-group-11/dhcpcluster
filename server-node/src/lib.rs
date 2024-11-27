@@ -15,7 +15,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
+type CoordinatorId = Arc<Mutex<Option<u32>>>;
 type Leases = Arc<Mutex<Vec<Lease>>>;
+type Peers = Arc<Mutex<Vec<Peer>>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Lease {
@@ -24,27 +26,42 @@ pub struct Lease {
     expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
-pub struct Cluster {
-    server: Server,
-    peers: Vec<Peer>,
+#[derive(Clone)]
+pub struct SharedState {
     #[allow(dead_code)]
-    coordinator_id: Option<u32>,
+    coordinator_id: CoordinatorId,
+    leases: Leases,
+    peers: Peers,
 }
 
-impl Cluster {
+pub struct Server {
+    #[allow(dead_code)]
+    id: u32,
+    config: Config,
+    shared_state: SharedState,
+}
+
+impl Server {
     /// Initialize cluster, and try connecting to peers.
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
     /// After connecting to peers, `run_server(stream)` needs to be called.
     pub fn connect<S: MessageStream + 'static>(config: Config) -> Self {
-        let mut peers = Vec::new();
-        let server = Server::new(&config);
+        let coordinator_id = Arc::new(Mutex::new(None));
+        let leases = Arc::new(Mutex::new(Vec::new()));
+        let peers = Arc::new(Mutex::new(Vec::new()));
 
-        for peer_address in config.peers {
+        let shared_state = SharedState {
+            coordinator_id,
+            leases,
+            peers,
+        };
+
+        for peer_address in &config.peers {
             match S::connect(peer_address) {
                 Ok(stream) => {
-                    let result = Self::start_handshake(stream, config.id, &server);
+                    let result = Self::start_handshake(stream, &config, &shared_state);
                     match result {
-                        Ok(peer) => peers.push(peer),
+                        Ok(peer) => shared_state.peers.lock().unwrap().push(peer),
                         Err(e) => eprintln!("{e:?}"),
                     }
                 }
@@ -53,18 +70,18 @@ impl Cluster {
         }
 
         Self {
-            server,
-            peers,
-            coordinator_id: None,
+            id: config.id,
+            config,
+            shared_state,
         }
     }
 
     fn start_handshake(
         mut stream: impl MessageStream + 'static,
-        id: u32,
-        server: &Server,
+        config: &Config,
+        shared_state: &SharedState,
     ) -> Result<Peer, Box<dyn Error>> {
-        let result = stream.send_message(&Message::Join(id));
+        let result = stream.send_message(&Message::Join(config.id));
         match result {
             Ok(_) => {
                 stream
@@ -77,8 +94,8 @@ impl Cluster {
                     Message::JoinAck(peer_id) => Ok(Peer::new(
                         stream,
                         peer_id,
-                        Arc::clone(&server.leases),
-                        server.config.heartbeat_timeout,
+                        Arc::clone(&shared_state.leases),
+                        config.heartbeat_timeout,
                     )),
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
                 }
@@ -99,13 +116,13 @@ impl Cluster {
 
         match message {
             Message::Join(id) => {
-                let result = stream.send_message(&Message::JoinAck(self.server.id));
+                let result = stream.send_message(&Message::JoinAck(self.config.id));
                 match result {
-                    Ok(_) => self.peers.push(Peer::new(
+                    Ok(_) => self.shared_state.peers.lock().unwrap().push(Peer::new(
                         stream,
                         id,
-                        Arc::clone(&self.server.leases),
-                        self.server.config.heartbeat_timeout,
+                        Arc::clone(&self.shared_state.leases),
+                        self.config.heartbeat_timeout,
                     )),
                     Err(e) => eprintln!("{e:?}"),
                 }
@@ -123,13 +140,11 @@ impl Cluster {
         }
     }
 
-    pub fn start_server(
+    pub fn start(
         mut self,
         peer_listener: impl MessageListener + 'static,
     ) -> Result<(), Box<dyn Error>> {
         let peer_listener_thread = thread::spawn(move || self.listen_nodes(peer_listener));
-
-        // TODO
 
         peer_listener_thread.join().map_err(|e| {
             format!(
@@ -138,21 +153,5 @@ impl Cluster {
             )
             .into()
         })
-    }
-}
-
-pub struct Server {
-    id: u32,
-    leases: Leases,
-    config: Config,
-}
-
-impl Server {
-    pub fn new(config: &Config) -> Self {
-        Self {
-            id: config.id,
-            leases: Arc::new(Mutex::new(Vec::new())),
-            config: config.clone(),
-        }
     }
 }

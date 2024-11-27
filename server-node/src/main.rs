@@ -1,6 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
-use server_node::{config::Config, Cluster};
+use server_node::{config::Config, Server};
 use std::{
     error::Error,
     net::{TcpListener, TcpStream},
@@ -21,8 +21,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     dbg!(&config);
 
     let peer_listener = TcpListener::bind(config.address_private)?;
-    let cluster = Cluster::connect::<TcpStream>(config);
-    cluster.start_server(peer_listener)?;
+    let server = Server::connect::<TcpStream>(config);
+    server.start(peer_listener)?;
 
     Ok(())
 }

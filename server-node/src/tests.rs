@@ -12,6 +12,7 @@ impl Default for Config {
             )),
             peers: Vec::new(),
             id: 0,
+            heartbeat_timeout: Duration::from_secs(2),
         }
     }
 }

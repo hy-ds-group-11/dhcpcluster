@@ -94,7 +94,7 @@ impl Server {
                     Message::JoinAck(peer_id) => Ok(Peer::new(
                         stream,
                         peer_id,
-                        Arc::clone(&shared_state.leases),
+                        shared_state.clone(),
                         config.heartbeat_timeout,
                     )),
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
@@ -121,7 +121,7 @@ impl Server {
                     Ok(_) => self.shared_state.peers.lock().unwrap().push(Peer::new(
                         stream,
                         id,
-                        Arc::clone(&self.shared_state.leases),
+                        self.shared_state.clone(),
                         self.config.heartbeat_timeout,
                     )),
                     Err(e) => eprintln!("{e:?}"),

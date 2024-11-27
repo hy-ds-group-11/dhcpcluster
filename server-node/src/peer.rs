@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{message::Message, Leases, MessageStream};
+use crate::{message::Message, MessageStream, SharedState};
 
 /// Peer connection
 pub struct Peer {
@@ -18,7 +18,7 @@ impl Peer {
     pub fn new(
         stream: impl MessageStream + 'static,
         id: u32,
-        leases: Leases,
+        shared_state: SharedState,
         heartbeat_timeout: Duration,
     ) -> Self {
         println!("Started connection to peer with id {id}");
@@ -29,7 +29,7 @@ impl Peer {
         Self {
             _id: id,
             _tx: tx,
-            _read_thread: thread::spawn(move || Self::read_thread_fn(stream_read, leases)),
+            _read_thread: thread::spawn(move || Self::read_thread_fn(stream_read, shared_state)),
             _write_thread: thread::spawn(move || {
                 Self::write_thread_fn(stream_write, rx, heartbeat_timeout)
             }),
@@ -42,22 +42,23 @@ impl Peer {
             .unwrap_or_else(|e| eprintln!("{e:?}"));
     }
 
-    fn read_thread_fn(mut stream: impl MessageStream, leases: Leases) {
+    fn read_thread_fn(mut stream: impl MessageStream, shared_state: SharedState) {
+        use Message::*;
         loop {
             let message = stream.receive_message().unwrap();
             dbg!(&message);
             match message {
-                Message::Join(_) => panic!("Peer tried to send Join message after handshake"),
-                Message::JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
-                Message::Heartbeat => println!("Heartbeat"),
-                Message::Election => todo!(),
-                Message::Okay => todo!(),
-                Message::Coordinator => todo!(),
-                Message::Add(lease) => {
+                Join(_) => panic!("Peer tried to send Join message after handshake"),
+                JoinAck(_) => panic!("Peer tried to send JoinAck message after handshake"),
+                Heartbeat => println!("Heartbeat"),
+                Election => todo!(),
+                Okay => todo!(),
+                Coordinator => todo!(),
+                Add(lease) => {
                     // TODO: checks needed for the lease
-                    leases.lock().unwrap().push(lease);
+                    shared_state.leases.lock().unwrap().push(lease);
                 }
-                Message::Update(_lease) => todo!(),
+                Update(_lease) => todo!(),
             }
         }
     }

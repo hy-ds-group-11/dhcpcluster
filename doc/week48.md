@@ -6,3 +6,12 @@ There is about 30% greater quantity of lines of test code than actual server
 implementation, and the team needs to get all members introduced to the test
 harness so that development can continue as a team effort.
 The next session has been scheduled for tomorrow afternoon.
+
+## 2024-11-28
+
+To be able to focus on feature development, we removed all the test code from
+the development branch for now. The idea would be to bring unit testing back
+when the codebase has matured to more or less feature-complete.
+
+After sorting out the finicky tests, we implemented heatbeat messages and
+graceful peer communication thread shutdown when the hearbeats time out.

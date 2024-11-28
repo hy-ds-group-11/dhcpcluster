@@ -1,5 +1,5 @@
 use crate::{
-    message::{receive_message, send_message, Message},
+    message::{self, Message},
     ServerThreadMessage,
 };
 use std::{
@@ -52,7 +52,6 @@ impl Peer {
         }
     }
 
-    #[allow(dead_code)]
     pub fn send_message(&self, message: Message) {
         self.tx
             .send(SenderThreadMessage::Relay(message))
@@ -65,34 +64,31 @@ impl Peer {
         tx: Sender<SenderThreadMessage>,
         server_tx: Sender<ServerThreadMessage>,
     ) {
-        use Message::*;
         loop {
-            let result = receive_message(&stream);
-            dbg!(&result);
+            let result = message::receive(&stream);
 
             // Handle peer connection loss
             if result.is_err() {
                 tx.send(SenderThreadMessage::Terminate)
                     .expect("Thread internal messaging failed!");
 
-                // TODO notify server thread of lost peer
+                server_tx
+                    .send(ServerThreadMessage::PeerLost(peer_id))
+                    .expect("Thread internal messaging failed!");
 
                 break;
             }
 
             let message = result.unwrap();
+            use Message::*;
             match message {
                 Join(_) | JoinAck(_) => {
                     panic!("Peer {peer_id} tried to send {message:?} after handshake")
                 }
                 Heartbeat => println!("Received heartbeat from {peer_id}"),
-                Election => todo!(),
-                Okay => todo!(),
-                Coordinator => todo!(),
-                Add(lease) => {
-                    // TODO: checks needed for the lease
-                }
-                Update(_lease) => todo!(),
+                _ => server_tx
+                    .send(ServerThreadMessage::ProtocolMessage(message))
+                    .unwrap(),
             }
         }
 
@@ -105,13 +101,13 @@ impl Peer {
             let receive = rx.recv_timeout(timeout);
 
             if receive.is_err() {
-                send_message(&stream, &Message::Heartbeat);
+                message::send(&stream, &Message::Heartbeat).unwrap();
                 continue;
             }
 
             match receive.unwrap() {
                 Relay(message) => {
-                    send_message(&stream, &message).unwrap_or_else(|e| eprintln!("{e:?}"));
+                    message::send(&stream, &message).unwrap_or_else(|e| eprintln!("{e:?}"));
                 }
                 Terminate => break,
             }

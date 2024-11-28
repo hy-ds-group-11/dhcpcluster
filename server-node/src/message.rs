@@ -26,13 +26,10 @@ pub enum Message {
     Update(Lease),
 }
 
-pub fn receive_message(stream: &TcpStream) -> Result<Message, ciborium::de::Error<io::Error>> {
+pub fn receive(stream: &TcpStream) -> Result<Message, ciborium::de::Error<io::Error>> {
     ciborium::from_reader(stream)
 }
 
-pub fn send_message(
-    stream: &TcpStream,
-    message: &Message,
-) -> Result<(), ciborium::ser::Error<io::Error>> {
+pub fn send(stream: &TcpStream, message: &Message) -> Result<(), ciborium::ser::Error<io::Error>> {
     ciborium::into_writer(message, stream)
 }

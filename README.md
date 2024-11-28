@@ -12,6 +12,8 @@ The software is currently _unimplemented_, but development work has started.
 
 [Design document :paperclip:](doc/design.md)
 
+[Rustdoc-generated server documentation :books:](https://hy-ds-group-11.github.io/dhcpcluster/server_node/index.html)
+
 ### Weekly notes :notebook_with_decorative_cover:
 
 | Week                | Summary                                                                          |

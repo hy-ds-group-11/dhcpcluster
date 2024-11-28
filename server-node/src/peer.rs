@@ -1,5 +1,8 @@
 use std::{
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -24,7 +27,7 @@ impl Peer {
     pub fn new(
         stream: impl MessageStream + 'static,
         id: u32,
-        shared_state: SharedState,
+        shared_state: Arc<SharedState>,
         heartbeat_timeout: Duration,
     ) -> Self {
         println!("Started connection to peer with id {id}");
@@ -60,29 +63,15 @@ impl Peer {
         mut stream: impl MessageStream,
         id: u32,
         tx: Sender<InternalMessage>,
-        shared_state: SharedState,
+        shared_state: Arc<SharedState>,
     ) {
         use Message::*;
         loop {
             let result = stream.receive_message();
+            dbg!(&result);
 
-            if let Ok(message) = result {
-                dbg!(&message);
-                match message {
-                    Join(_) | JoinAck(_) => {
-                        panic!("Peer {id} tried to send {message:?} after handshake")
-                    }
-                    Heartbeat => println!("Received heartbeat from {id}"),
-                    Election => todo!(),
-                    Okay => todo!(),
-                    Coordinator => todo!(),
-                    Add(lease) => {
-                        // TODO: checks needed for the lease
-                        shared_state.leases.lock().unwrap().push(lease);
-                    }
-                    Update(_lease) => todo!(),
-                }
-            } else {
+            // Handle peer connection loss
+            if result.is_err() {
                 tx.send(InternalMessage::Terminate)
                     .expect("Thread internal messaging failed!");
                 shared_state
@@ -92,7 +81,24 @@ impl Peer {
                     .retain(|peer| peer.id != id);
                 break;
             }
+
+            let message = result.unwrap();
+            match message {
+                Join(_) | JoinAck(_) => {
+                    panic!("Peer {id} tried to send {message:?} after handshake")
+                }
+                Heartbeat => println!("Received heartbeat from {id}"),
+                Election => todo!(),
+                Okay => todo!(),
+                Coordinator => todo!(),
+                Add(lease) => {
+                    // TODO: checks needed for the lease
+                    shared_state.leases.lock().unwrap().push(lease);
+                }
+                Update(_lease) => todo!(),
+            }
         }
+
         println!("Connection to peer {id} lost");
     }
 

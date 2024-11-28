@@ -15,9 +15,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-type CoordinatorId = Arc<Mutex<Option<u32>>>;
-type Leases = Arc<Mutex<Vec<Lease>>>;
-type Peers = Arc<Mutex<Vec<Peer>>>;
+type CoordinatorId = Mutex<Option<u32>>;
+type Leases = Mutex<Vec<Lease>>;
+type Peers = Mutex<Vec<Peer>>;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Lease {
@@ -26,7 +26,6 @@ pub struct Lease {
     expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
-#[derive(Clone)]
 pub struct SharedState {
     #[allow(dead_code)]
     coordinator_id: CoordinatorId,
@@ -38,28 +37,28 @@ pub struct Server {
     #[allow(dead_code)]
     id: u32,
     config: Config,
-    shared_state: SharedState,
+    shared_state: Arc<SharedState>,
 }
 
 impl Server {
     /// Initialize cluster, and try connecting to peers.
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
-    /// After connecting to peers, `run_server(stream)` needs to be called.
+    /// After connecting to peers, you probably want to call [`start`].
     pub fn connect<S: MessageStream + 'static>(config: Config) -> Self {
-        let coordinator_id = Arc::new(Mutex::new(None));
-        let leases = Arc::new(Mutex::new(Vec::new()));
-        let peers = Arc::new(Mutex::new(Vec::new()));
+        let coordinator_id = Mutex::new(None);
+        let leases = Mutex::new(Vec::new());
+        let peers = Mutex::new(Vec::new());
 
-        let shared_state = SharedState {
+        let shared_state = Arc::new(SharedState {
             coordinator_id,
             leases,
             peers,
-        };
+        });
 
         for peer_address in &config.peers {
             match S::connect(peer_address) {
                 Ok(stream) => {
-                    let result = Self::start_handshake(stream, &config, &shared_state);
+                    let result = Self::start_handshake(stream, &config, Arc::clone(&shared_state));
                     match result {
                         Ok(peer) => shared_state.peers.lock().unwrap().push(peer),
                         Err(e) => eprintln!("{e:?}"),
@@ -79,7 +78,7 @@ impl Server {
     fn start_handshake(
         mut stream: impl MessageStream + 'static,
         config: &Config,
-        shared_state: &SharedState,
+        shared_state: Arc<SharedState>,
     ) -> Result<Peer, Box<dyn Error>> {
         let result = stream.send_message(&Message::Join(config.id));
         match result {

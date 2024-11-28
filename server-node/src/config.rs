@@ -1,3 +1,10 @@
+//! # Server Configuration and TOML File Loading
+//!
+//! This module contains the server configuration structure, along with facilities for
+//! loading configuration files from the filesystem.
+//!
+//! Jump to [`Config::load_toml_file`] for configuration file loading.
+
 use serde::Deserialize;
 use std::{error::Error, ffi::OsStr, net::SocketAddr, path::Path, str::FromStr, time::Duration};
 
@@ -18,6 +25,9 @@ impl FromStr for ConfigFile {
     }
 }
 
+/// Server configuration
+///
+/// Use [`Config::load_toml_file`] to initialize.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub address_private: SocketAddr,
@@ -48,6 +58,12 @@ impl From<ConfigFile> for Config {
 }
 
 impl Config {
+    /// Loads a .toml file from the filesystem, parses it, and initializes a [`Config`].
+    ///
+    /// ## Error cases:
+    /// - File extension is not .toml
+    /// - File access is unsuccessful
+    /// - TOML parsing failure
     pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
         if path.as_ref().extension() != Some(OsStr::new("toml")) {
             return Err("Config file path should end in .toml".into());

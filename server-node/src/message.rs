@@ -1,3 +1,11 @@
+//! # Internal Server-to-Server Protocol
+//!
+//! This module contains traits for establishing connections and sending and receiving messages to server peers.
+//!
+//! The server communication style is message passing with multicast.
+//!
+//! Jump to [`Message`] for the server-to-server message definition.
+
 use crate::Lease;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -6,6 +14,7 @@ use std::{
     time::Duration,
 };
 
+/// # A server-to-server message
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Message {
     Join(u32),
@@ -18,7 +27,10 @@ pub enum Message {
     Update(Lease),
 }
 
-/// A trait for listening to incoming connections
+/// # A trait for listening to incoming connections
+///
+/// You probably want to use [`std::net::TcpListener`] in production code (implementation provided in this crate),
+/// or implement the trait for any alternative communication channel with applicable semantics.
 pub trait MessageListener: Send + Sized {
     type Stream: MessageStream;
 
@@ -41,7 +53,10 @@ impl MessageListener for TcpListener {
     }
 }
 
-/// A trait for receiving and sending [`Message`]s.
+/// # A trait for receiving and sending [`Message`]s
+///
+/// You probably want to use [`std::net::TcpStream`] in production code (implementation provided in this crate),
+/// or implement the trait for any alternative communication channel with applicable semantics.
 pub trait MessageStream: Read + Write + Send + Sized {
     fn connect(addr: impl ToSocketAddrs) -> io::Result<Self>;
 

@@ -1,8 +1,21 @@
+//! # DHCP Cluster - Server Implementation
+//!
+//! This crate contains a distributed DHCP server implementation, with a custom protocol between nodes.
+//!
+//! For the protocol definition, look into the [`message`] module.
+//!
+//! The server architecture comprises of threads, which use blocking operations to communicate over [`MessageStream`]s.
+//! The intended underlying implementation of [`MessageStream`] is [`std::net::TcpStream`].
+//! There are two threads per active peer, one for receiving messages and one for sending messages.
+//! Currently, the receiver thread also reacts to all messages and applies bookkeeping operation to the [`SharedState`].
+//!
+//! For the communication thread implementation, look into the [`peer`] module.
+
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 pub mod config;
-mod message;
-mod peer;
+pub mod message;
+pub mod peer;
 
 use crate::{config::Config, peer::Peer};
 use message::{Message, MessageListener, MessageStream};
@@ -19,6 +32,7 @@ type CoordinatorId = Mutex<Option<u32>>;
 type Leases = Mutex<Vec<Lease>>;
 type Peers = Mutex<Vec<Peer>>;
 
+/// A DHCP Lease
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub struct Lease {
     hardware_address: [u8; 6],    // Assume MAC address
@@ -26,6 +40,8 @@ pub struct Lease {
     expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
+/// The shared state which the server threads operate on.
+/// Ideally, this should stay consistent among server peers.
 pub struct SharedState {
     #[allow(dead_code)]
     coordinator_id: CoordinatorId,
@@ -33,6 +49,7 @@ pub struct SharedState {
     peers: Peers,
 }
 
+/// The distributed DHCP server
 pub struct Server {
     #[allow(dead_code)]
     id: u32,
@@ -41,9 +58,9 @@ pub struct Server {
 }
 
 impl Server {
-    /// Initialize cluster, and try connecting to peers.
+    /// Initialize shared state, and try connecting to peers.
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
-    /// After connecting to peers, you probably want to call [`start`].
+    /// After connecting to peers, you probably want to call [`Server::start`].
     pub fn connect<S: MessageStream + 'static>(config: Config) -> Self {
         let coordinator_id = Mutex::new(None);
         let leases = Mutex::new(Vec::new());
@@ -139,11 +156,18 @@ impl Server {
         }
     }
 
+    /// Start listening to incoming connections from server peers and DHCP clients.
+    ///
+    /// This function may return, but only in error situations. Error handling is TBD and WIP.
+    /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
     pub fn start(
         mut self,
         peer_listener: impl MessageListener + 'static,
     ) -> Result<(), Box<dyn Error>> {
         let peer_listener_thread = thread::spawn(move || self.listen_nodes(peer_listener));
+
+        // TODO: start client listener thread. Using scoped threads here may make the code look nicer,
+        // decide on that later.
 
         peer_listener_thread.join().map_err(|e| {
             format!(

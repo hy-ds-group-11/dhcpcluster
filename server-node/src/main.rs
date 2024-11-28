@@ -3,7 +3,7 @@
 use server_node::{config::Config, Server};
 use std::{
     error::Error,
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     path::{Path, PathBuf},
 };
 
@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     dbg!(&config);
 
     let peer_listener = TcpListener::bind(config.address_private)?;
-    let server = Server::connect::<TcpStream>(config);
+    let server = Server::connect(config);
     server.start(peer_listener)?;
 
     Ok(())

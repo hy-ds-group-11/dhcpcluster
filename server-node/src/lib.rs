@@ -155,11 +155,7 @@ impl Server {
         let result = message::send(&stream, &Message::Join(config.id));
         match result {
             Ok(_) => {
-                stream
-                    .set_read_timeout(Some(config.heartbeat_timeout))
-                    .unwrap();
-                let message = message::receive(&stream).unwrap();
-                stream.set_read_timeout(None).unwrap();
+                let message = message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
 
                 match dbg!(message) {
                     Message::JoinAck(peer_id) => Ok(Peer::new(
@@ -179,11 +175,7 @@ impl Server {
     }
 
     fn answer_handshake(&mut self, stream: TcpStream) {
-        stream
-            .set_read_timeout(Some(self.config.heartbeat_timeout))
-            .unwrap();
-        let message = message::receive(&stream).unwrap();
-        stream.set_read_timeout(None).unwrap();
+        let message = message::recv_timeout(&stream, self.config.heartbeat_timeout).unwrap();
 
         match message {
             Message::Join(peer_id) => {

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::{self},
     net::TcpStream,
+    time::Duration,
 };
 
 /// # A server-to-server message
@@ -26,8 +27,18 @@ pub enum Message {
     Update(Lease),
 }
 
-pub fn receive(stream: &TcpStream) -> Result<Message, ciborium::de::Error<io::Error>> {
+pub fn recv(stream: &TcpStream) -> Result<Message, ciborium::de::Error<io::Error>> {
     ciborium::from_reader(stream)
+}
+
+pub fn recv_timeout(
+    stream: &TcpStream,
+    timeout: Duration,
+) -> Result<Message, ciborium::de::Error<io::Error>> {
+    stream.set_read_timeout(Some(timeout)).unwrap();
+    let result = recv(stream);
+    stream.set_read_timeout(None).unwrap();
+    result
 }
 
 pub fn send(stream: &TcpStream, message: &Message) -> Result<(), ciborium::ser::Error<io::Error>> {

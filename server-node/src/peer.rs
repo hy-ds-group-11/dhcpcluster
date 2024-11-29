@@ -65,7 +65,7 @@ impl Peer {
         server_tx: Sender<ServerThreadMessage>,
     ) {
         loop {
-            let result = message::receive(&stream);
+            let result = message::recv(&stream);
 
             // Handle peer connection loss
             if result.is_err() {

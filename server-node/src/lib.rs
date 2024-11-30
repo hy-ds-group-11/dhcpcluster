@@ -18,6 +18,7 @@ pub mod peer;
 
 use crate::{config::Config, peer::Peer};
 use message::Message;
+use peer::PeerId;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -42,10 +43,12 @@ pub struct Lease {
     expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
+#[derive(Debug)]
 pub enum ServerThreadMessage {
     NewConnection(TcpStream),
-    PeerLost(u32),
-    ProtocolMessage(Message),
+    PeerLost(PeerId),
+    ElectionTimeout,
+    ProtocolMessage { sender_id: PeerId, message: Message },
 }
 
 /// The distributed DHCP server
@@ -53,7 +56,7 @@ pub struct Server {
     config: Config,
     rx: Option<Receiver<ServerThreadMessage>>,
     tx: Sender<ServerThreadMessage>,
-    coordinator_id: Option<u32>,
+    coordinator_id: Option<PeerId>,
     #[allow(dead_code)]
     leases: Vec<Lease>,
     peers: Vec<Peer>,
@@ -101,6 +104,9 @@ impl Server {
     /// This function may return, but only in error situations. Error handling is TBD and WIP.
     /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
     pub fn start(mut self, peer_listener: TcpListener) -> Result<(), Box<dyn Error>> {
+        // Cluster configuration change, start election (TODO, properly consider when first election should be held)
+        self.start_election();
+
         let server_tx = self.tx.clone();
         let peer_listener_thread =
             thread::spawn(move || Self::listen_nodes(peer_listener, server_tx));
@@ -116,13 +122,40 @@ impl Server {
             match message {
                 NewConnection(tcp_stream) => self.answer_handshake(tcp_stream),
                 PeerLost(peer_id) => self.remove_peer(peer_id),
-                ProtocolMessage(protocol_message) => match protocol_message {
-                    Election => todo!(),
-                    Okay => todo!(),
-                    Coordinator => todo!(),
+                ElectionTimeout => self.finish_election(),
+                ProtocolMessage { sender_id, message } => match message {
+                    Election => {
+                        println!("Peer {sender_id} invited {message:?}");
+                        if sender_id < self.config.id {
+                            println!("Bullying.");
+                            self.peer(sender_id).unwrap().send_message(Message::Okay);
+                        }
+                    }
+                    Okay => {
+                        assert!(sender_id > self.config.id);
+                        print!("Peer {sender_id}: {message:?}, ");
+                        if self.local_role == ServerRole::WaitingForElection {
+                            println!("stepping down to follower");
+                            self.local_role = ServerRole::Follower;
+                        } else {
+                            println!("already stepped down");
+                        }
+                    }
+                    Coordinator => {
+                        // TODO this assertion will be hit when quickly starting nodes in increasing id order
+                        // This is because the later starting, higher id peer won't know about the ongoing election
+                        assert!(sender_id > self.config.id);
+                        //assert_ne!(self.local_role, ServerRole::Coordinator);
+                        println!("Recognizing {sender_id} as coordinator");
+                        self.coordinator_id = Some(sender_id);
+                        // TODO consider if this step-down should happen at an earlier point,
+                        // such as when cluster changes, and if coordinator_id should be reset
+                        // to None at some earlier point (when noticed election in progress?)
+                        self.local_role = ServerRole::Follower;
+                    }
                     Add(lease) => todo!(),
                     Update(lease) => todo!(),
-                    _ => panic!("Server received unexpected message {protocol_message:?}"),
+                    _ => panic!("Server received unexpected {message:?} from {sender_id}"),
                 },
             }
         }
@@ -196,7 +229,7 @@ impl Server {
         }
     }
 
-    fn remove_peer(&mut self, peer_id: u32) {
+    fn remove_peer(&mut self, peer_id: PeerId) {
         self.peers.retain(|peer| peer.id != peer_id);
 
         if Some(peer_id) == self.coordinator_id {
@@ -204,11 +237,15 @@ impl Server {
         }
     }
 
+    fn peer(&self, peer_id: PeerId) -> Option<&Peer> {
+        self.peers.iter().find(|peer| peer.id == peer_id)
+    }
+
     /// Send [`Message::Election`] to all server peers with higher ids than this server.
     ///
-    /// This function blocks until the bully algorithm timeout expires.
+    /// This function starts a timer thread which sleeps until the bully algorithm timeout expires.
+    /// The timer triggers a [`ServerThreadMessage::ElectionTimeout`] to the the server thread.
     fn start_election(&mut self) {
-        // TODO Move the waiting into a separate thread so we don't block the main server thread
         use ServerRole::*;
 
         assert_eq!(self.local_role, Follower);
@@ -220,9 +257,21 @@ impl Server {
             }
         }
 
-        // Wait for peers to vote.
-        thread::sleep(self.config.heartbeat_timeout);
+        let dur = self.config.heartbeat_timeout;
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            // Wait for peers to vote.
+            println!("Starting election wait");
+            thread::sleep(dur);
+            println!("Election wait over");
+            tx.send(ServerThreadMessage::ElectionTimeout).unwrap();
+        }); // Drop JoinHandle, detaching election thread from server thread
+    }
 
+    /// Inspect current server role. Become leader and send [`Message::Coordinator`] to all peers
+    /// if no event has reset the server role back to [`ServerRole::Follower`].
+    fn finish_election(&mut self) {
+        use ServerRole::*;
         match self.local_role {
             WaitingForElection => {
                 self.local_role = Coordinator;

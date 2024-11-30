@@ -14,10 +14,12 @@ enum SenderThreadMessage {
     Relay(Message),
 }
 
+pub type PeerId = u32;
+
 /// Peer connection
 #[allow(dead_code)]
 pub struct Peer {
-    pub id: u32,
+    pub id: PeerId,
     tx: Sender<SenderThreadMessage>,
     read_thread: JoinHandle<()>,
     write_thread: JoinHandle<()>,
@@ -26,7 +28,7 @@ pub struct Peer {
 impl Peer {
     pub fn new(
         stream: TcpStream,
-        id: u32,
+        id: PeerId,
         server_tx: Sender<ServerThreadMessage>,
         heartbeat_timeout: Duration,
     ) -> Self {
@@ -60,7 +62,7 @@ impl Peer {
 
     fn read_thread_fn(
         stream: TcpStream,
-        peer_id: u32,
+        peer_id: PeerId,
         tx: Sender<SenderThreadMessage>,
         server_tx: Sender<ServerThreadMessage>,
     ) {
@@ -87,7 +89,10 @@ impl Peer {
                 }
                 Heartbeat => println!("Received heartbeat from {peer_id}"),
                 _ => server_tx
-                    .send(ServerThreadMessage::ProtocolMessage(message))
+                    .send(ServerThreadMessage::ProtocolMessage {
+                        sender_id: peer_id,
+                        message,
+                    })
                     .unwrap(),
             }
         }

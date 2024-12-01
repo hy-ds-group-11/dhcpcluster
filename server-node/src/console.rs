@@ -6,11 +6,6 @@ use crate::Server;
 use std::{collections::VecDeque, env, fmt::Display, io::Write, sync::Mutex, time::SystemTime};
 use terminal_size::{terminal_size, Height};
 
-pub struct Console {
-    history_len: usize,
-    event_log: VecDeque<(SystemTime, String)>,
-}
-
 impl Display for Server {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let write_label = |f: &mut std::fmt::Formatter<'_>, label| write!(f, "    {label:<16} ");
@@ -40,20 +35,15 @@ impl Display for Server {
     }
 }
 
+pub struct Console {
+    history_len: usize,
+    event_log: VecDeque<(SystemTime, String)>,
+}
+
 impl Console {
     pub fn push_event(&mut self, description: String) {
-        if !Self::enabled() {
-            println!("{}", description);
-            return;
-        }
-
         self.event_log.truncate(self.history_len - 1);
         self.event_log.push_front((SystemTime::now(), description));
-    }
-
-    fn enabled() -> bool {
-        // This system is opt-in via env. variable
-        env::var("SERVER_CONSOLE_UI").is_ok()
     }
 
     const fn new(history_len: usize) -> Self {
@@ -64,10 +54,6 @@ impl Console {
     }
 
     fn render(&self, server: &Server) {
-        if !Self::enabled() {
-            return;
-        }
-
         // Get terminal height
         let mut lines: Option<usize> = terminal_size().map(|(_, Height(h))| h.into());
         let mut stdout = std::io::stdout().lock();
@@ -110,18 +96,29 @@ impl Console {
     }
 }
 
-pub static CONSOLE: Mutex<Console> = const { Mutex::new(Console::new(32)) };
+pub static CONSOLE: Mutex<Console> = const { Mutex::new(Console::new(128)) };
+
+pub fn enabled() -> bool {
+    // This system is opt-in via env. variable
+    env::var("SERVER_CONSOLE_UI").is_ok()
+}
 
 macro_rules! log {
     ($($arg:tt)*) => {{
-        let mut cons = crate::console::CONSOLE.lock().unwrap();
-        cons.push_event(format!($($arg)*));
+        if crate::console::enabled() {
+            let mut cons = crate::console::CONSOLE.lock().unwrap();
+            cons.push_event(format!($($arg)*));
+        } else {
+            println!($($arg)*);
+        }
     }};
 }
 
 pub(crate) use log;
 
 pub fn render(server: &Server) {
-    let cons = CONSOLE.lock().unwrap();
-    cons.render(server);
+    if enabled() {
+        let cons = CONSOLE.lock().unwrap();
+        cons.render(server);
+    }
 }

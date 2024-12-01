@@ -4,6 +4,7 @@ use crate::{
     ServerThreadMessage,
 };
 use std::{
+    fmt::Display,
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
     thread::{self, JoinHandle},
@@ -119,5 +120,11 @@ impl Peer {
                 Terminate => break,
             }
         }
+    }
+}
+
+impl Display for Peer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.id)
     }
 }

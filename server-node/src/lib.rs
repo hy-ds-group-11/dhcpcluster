@@ -13,6 +13,7 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 pub mod config;
+pub mod console;
 pub mod message;
 pub mod peer;
 
@@ -52,7 +53,9 @@ pub enum ServerThreadMessage {
 }
 
 /// The distributed DHCP server
+#[derive(Debug)]
 pub struct Server {
+    pub start_time: SystemTime,
     config: Config,
     rx: Option<Receiver<ServerThreadMessage>>,
     tx: Sender<ServerThreadMessage>,
@@ -81,14 +84,15 @@ impl Server {
                     let result = Self::start_handshake(stream, &config, tx.clone());
                     match result {
                         Ok(peer) => peers.push(peer),
-                        Err(e) => eprintln!("{e:?}"),
+                        Err(e) => console::log!("{e:?}"),
                     }
                 }
-                Err(e) => eprintln!("{e:?}"),
+                Err(e) => console::log!("{e:?}"),
             }
         }
 
         Self {
+            start_time: SystemTime::now(),
             config,
             rx: Some(rx),
             tx,
@@ -124,21 +128,22 @@ impl Server {
                 PeerLost(peer_id) => self.remove_peer(peer_id),
                 ElectionTimeout => self.finish_election(),
                 ProtocolMessage { sender_id, message } => match message {
+                    Heartbeat => console::log!("Received heartbeat from {sender_id}"),
                     Election => {
-                        println!("Peer {sender_id} invited {message:?}");
+                        console::log!("Peer {sender_id} invited {message:?}");
                         if sender_id < self.config.id {
-                            println!("Bullying.");
+                            console::log!("Bullying.");
                             self.peer(sender_id).unwrap().send_message(Message::Okay);
                         }
                     }
                     Okay => {
                         assert!(sender_id > self.config.id);
-                        print!("Peer {sender_id}: {message:?}, ");
+                        console::log!("Peer {sender_id}: {message:?}, ");
                         if self.local_role == ServerRole::WaitingForElection {
-                            println!("stepping down to follower");
+                            console::log!("stepping down to follower");
                             self.local_role = ServerRole::Follower;
                         } else {
-                            println!("already stepped down");
+                            console::log!("already stepped down");
                         }
                     }
                     Coordinator => {
@@ -146,7 +151,7 @@ impl Server {
                         // This is because the later starting, higher id peer won't know about the ongoing election
                         assert!(sender_id > self.config.id);
                         //assert_ne!(self.local_role, ServerRole::Coordinator);
-                        println!("Recognizing {sender_id} as coordinator");
+                        console::log!("Recognizing {sender_id} as coordinator");
                         self.coordinator_id = Some(sender_id);
                         // TODO consider if this step-down should happen at an earlier point,
                         // such as when cluster changes, and if coordinator_id should be reset
@@ -158,6 +163,7 @@ impl Server {
                     _ => panic!("Server received unexpected {message:?} from {sender_id}"),
                 },
             }
+            console::render(&self);
         }
 
         peer_listener_thread.join().map_err(|e| {
@@ -175,7 +181,7 @@ impl Server {
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::NewConnection(stream))
                     .unwrap(),
-                Err(e) => eprintln!("{e:?}"),
+                Err(e) => console::log!("{e:?}"),
             }
         }
     }
@@ -190,18 +196,21 @@ impl Server {
             Ok(_) => {
                 let message = message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
 
-                match dbg!(message) {
-                    Message::JoinAck(peer_id) => Ok(Peer::new(
-                        stream,
-                        peer_id,
-                        server_tx,
-                        config.heartbeat_timeout,
-                    )),
+                match message {
+                    Message::JoinAck(peer_id) => {
+                        console::log!("Connected to peer {peer_id}");
+                        Ok(Peer::new(
+                            stream,
+                            peer_id,
+                            server_tx,
+                            config.heartbeat_timeout,
+                        ))
+                    }
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
                 }
             }
             Err(e) => {
-                eprintln!("{e:?}");
+                console::log!("{e:?}");
                 Err(e.into())
             }
         }
@@ -215,6 +224,7 @@ impl Server {
                 let result = message::send(&stream, &Message::JoinAck(self.config.id));
                 match result {
                     Ok(_) => {
+                        console::log!("Peer {peer_id} joined");
                         self.peers.push(Peer::new(
                             stream,
                             peer_id,
@@ -222,7 +232,7 @@ impl Server {
                             self.config.heartbeat_timeout,
                         ));
                     }
-                    Err(e) => eprintln!("{e:?}"),
+                    Err(e) => console::log!("{e:?}"),
                 }
             }
             _ => panic!("First message of peer wasn't Join"),
@@ -261,9 +271,9 @@ impl Server {
         let tx = self.tx.clone();
         thread::spawn(move || {
             // Wait for peers to vote.
-            println!("Starting election wait");
+            console::log!("Starting election wait");
             thread::sleep(dur);
-            println!("Election wait over");
+            console::log!("Election wait over");
             tx.send(ServerThreadMessage::ElectionTimeout).unwrap();
         }); // Drop JoinHandle, detaching election thread from server thread
     }
@@ -282,7 +292,7 @@ impl Server {
             }
             Coordinator => unreachable!(),
             Follower => {
-                println!("Received OK during election");
+                console::log!("Received OK during election");
             }
         }
     }

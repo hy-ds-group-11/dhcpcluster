@@ -1,4 +1,5 @@
 use crate::{
+    console,
     message::{self, Message},
     ServerThreadMessage,
 };
@@ -17,11 +18,13 @@ enum SenderThreadMessage {
 pub type PeerId = u32;
 
 /// Peer connection
-#[allow(dead_code)]
+#[derive(Debug)]
 pub struct Peer {
     pub id: PeerId,
     tx: Sender<SenderThreadMessage>,
+    #[allow(dead_code)]
     read_thread: JoinHandle<()>,
+    #[allow(dead_code)]
     write_thread: JoinHandle<()>,
 }
 
@@ -32,7 +35,7 @@ impl Peer {
         server_tx: Sender<ServerThreadMessage>,
         heartbeat_timeout: Duration,
     ) -> Self {
-        println!("Started connection to peer with id {id}");
+        console::log!("Started connection to peer with id {id}");
         let (tx, rx) = mpsc::channel::<SenderThreadMessage>();
 
         let stream_read = stream.try_clone().unwrap();
@@ -57,7 +60,7 @@ impl Peer {
     pub fn send_message(&self, message: Message) {
         self.tx
             .send(SenderThreadMessage::Relay(message))
-            .unwrap_or_else(|e| eprintln!("{e:?}"));
+            .unwrap_or_else(|e| console::log!("{e:?}"));
     }
 
     fn read_thread_fn(
@@ -87,7 +90,6 @@ impl Peer {
                 Join(_) | JoinAck(_) => {
                     panic!("Peer {peer_id} tried to send {message:?} after handshake")
                 }
-                Heartbeat => println!("Received heartbeat from {peer_id}"),
                 _ => server_tx
                     .send(ServerThreadMessage::ProtocolMessage {
                         sender_id: peer_id,
@@ -97,7 +99,7 @@ impl Peer {
             }
         }
 
-        println!("Connection to peer {peer_id} lost");
+        console::log!("Connection to peer {peer_id} lost");
     }
 
     fn write_thread_fn(stream: TcpStream, rx: Receiver<SenderThreadMessage>, timeout: Duration) {
@@ -112,7 +114,7 @@ impl Peer {
 
             match receive.unwrap() {
                 Relay(message) => {
-                    message::send(&stream, &message).unwrap_or_else(|e| eprintln!("{e:?}"));
+                    message::send(&stream, &message).unwrap_or_else(|e| console::log!("{e:?}"));
                 }
                 Terminate => break,
             }

@@ -48,6 +48,7 @@ impl Server {
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
     /// After connecting to peers, you probably want to call [`Server::start`].
     pub fn connect(config: Config) -> Self {
+        let start_time = SystemTime::now();
         let coordinator_id = None;
         let leases = Vec::new();
         let mut peers = Vec::new();
@@ -61,15 +62,14 @@ impl Server {
                     let result = Peer::start_handshake(stream, &config, tx.clone());
                     match result {
                         Ok(peer) => peers.push(peer),
-                        Err(e) => console::log!("{e:?}"),
+                        Err(e) => console::warning!("{e:?}"),
                     }
                 }
-                Err(e) => console::log!("{e:?}"),
+                Err(e) => console::warning!("Connection refused to peer {peer_address}\n{e:?}"),
             }
         }
 
         Self {
-            start_time: SystemTime::now(),
             config,
             rx: Some(rx),
             tx,
@@ -77,6 +77,7 @@ impl Server {
             leases,
             peers,
             local_role,
+            start_time,
         }
     }
 
@@ -105,7 +106,7 @@ impl Server {
                 PeerLost(peer_id) => self.remove_peer(peer_id),
                 ElectionTimeout => self.finish_election(),
                 ProtocolMessage { sender_id, message } => match message {
-                    Heartbeat => console::log!("Received heartbeat from {sender_id}"),
+                    Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
                     Election => self.handle_election(sender_id, &message),
                     Okay => self.handle_okay(sender_id, &message),
                     Coordinator => self.handle_coordinator(sender_id),
@@ -161,7 +162,7 @@ impl Server {
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::NewConnection(stream))
                     .unwrap(),
-                Err(e) => console::log!("{e:?}"),
+                Err(e) => console::warning!("{e:?}"),
             }
         }
     }
@@ -182,7 +183,7 @@ impl Server {
                             self.config.heartbeat_timeout,
                         ));
                     }
-                    Err(e) => console::log!("{e:?}"),
+                    Err(e) => console::warning!("{e:?}"),
                 }
             }
             _ => panic!("First message of peer wasn't Join"),
@@ -257,20 +258,39 @@ impl Display for Server {
             "Server {} listening on {}",
             self.config.id, self.config.address_private
         );
-        let hline = title.chars().map(|_| '-').collect::<String>();
-        writeln!(f, "{title}\n{hline}")?;
+        let mut hline = title.chars().map(|_| '-').collect::<String>();
+        hline = format!("\x1B[90m{hline}\x1B[0m");
+        writeln!(f, "{hline}\n{title}\n")?;
 
-        write_label(f, "Coordinator")?;
+        // Coordinator
+        write_label(f, "Coordinator id")?;
         if let Some(coordinator) = self.coordinator_id {
             writeln!(f, "{coordinator}",)?;
         } else {
             writeln!(f, "Unknown",)?;
         }
+
+        // Peers
         write_label(f, "Active peers")?;
-        for peer in &self.peers {
-            write!(f, "{peer} ")?;
+        write!(f, "[ ")?;
+
+        let mut ids = self.peers.iter().map(|item| item.id).collect::<Vec<_>>();
+        ids.push(self.config.id);
+        ids.sort();
+        for (i, id) in ids.iter().enumerate() {
+            if *id != self.config.id {
+                write!(f, "{id}")?;
+            } else {
+                write!(f, "\x1B[1m{id}\x1B[0m")?;
+            }
+
+            if i != ids.len() - 1 {
+                write!(f, ", ")?;
+            }
         }
-        writeln!(f)?;
+        writeln!(f, " ]")?;
+
+        // Role
         write_label(f, "Current role")?;
         writeln!(f, "{:?}", self.local_role)?;
 

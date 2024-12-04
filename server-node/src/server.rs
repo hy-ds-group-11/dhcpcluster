@@ -119,7 +119,7 @@ impl Server {
                     _ => panic!("Server received unexpected {message:?} from {sender_id}"),
                 },
             }
-            console::render(&self);
+            console::render(self.start_time, &format!("{self}"));
         }
 
         peer_listener_thread.join().map_err(|e| {

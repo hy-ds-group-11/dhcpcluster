@@ -1,9 +1,13 @@
 //! # User interface for a unix terminal
 //! Renders server's internal state and latest messages in a consistent way
-//! Intended to be used via the global static [`CONSOLE`] and the `log`-macro.
+//! Intended to be used via the global static [`CONSOLE`] and the macros defined in this crate.
 
-use crate::server::Server;
-use std::{collections::VecDeque, io::Write, sync::Mutex, time::SystemTime};
+use std::{
+    collections::VecDeque,
+    io::{IsTerminal, Write},
+    sync::Mutex,
+    time::SystemTime,
+};
 use terminal_size::{terminal_size, Height};
 
 pub struct Console {
@@ -24,21 +28,20 @@ impl Console {
         }
     }
 
-    fn render(&self, server: &Server) {
+    fn render(&self, start_time: SystemTime, state: &str) {
+        let mut stdout = std::io::stdout().lock();
+
         // Get terminal height
         let mut lines: Option<usize> = terminal_size().map(|(_, Height(h))| h.into());
-        let mut stdout = std::io::stdout().lock();
 
         // Clear terminal and move cursor to top left
         stdout.write_all(b"\x1B[2J\x1B[H").unwrap();
 
-        // Format the whole server state into a string
-        let server_state = format!("{server}");
         if let Some(lines) = &mut lines {
             // Subtract from remaining terminal lines available
-            let remaining = lines.saturating_sub(server_state.lines().count());
+            let remaining = lines.saturating_sub(state.lines().count());
             if remaining > 0 {
-                stdout.write_all(server_state.as_bytes()).unwrap();
+                stdout.write_all(state.as_bytes()).unwrap();
                 *lines = remaining;
             } else {
                 writeln!(
@@ -54,7 +57,7 @@ impl Console {
         // Print log (up to the remaining terminal lines, no more)
         let lines = lines.unwrap_or(usize::MAX);
         for (time, desc) in self.event_log.iter().take(lines).rev() {
-            if let Ok(duration) = time.duration_since(server.start_time) {
+            if let Ok(duration) = time.duration_since(start_time) {
                 write!(stdout, "\x1B[90m{duration:<9.3?}:\x1B[0m ").unwrap();
             }
             stdout.write_all(desc.as_bytes()).unwrap();
@@ -63,48 +66,53 @@ impl Console {
     }
 }
 
-pub static CONSOLE: Mutex<Console> = const { Mutex::new(Console::new(128)) };
+pub static CONSOLE: Mutex<Console> = const { Mutex::new(Console::new(1024)) };
+
+pub fn render(start_time: SystemTime, state: &str) {
+    if std::io::stdout().is_terminal() {
+        let cons = CONSOLE.lock().unwrap();
+        cons.render(start_time, state);
+    }
+    // Otherwise do nothing, because [`log_str`] already prints the event as is
+}
+
+pub fn log_str(event: &str, style: &str) {
+    if std::io::stdout().is_terminal() {
+        let mut cons = crate::console::CONSOLE.lock().unwrap();
+        for line in event.split("\n") {
+            // TODO: Encode messages to a struct with a style-enum and apply escape sequences in [`render`]
+            cons.push_event(format!("\x1B{style}{line}\x1B[0m"));
+        }
+    } else {
+        // Don't write control characters, just output lines as is
+        println!("{event}");
+    }
+}
 
 macro_rules! debug {
     ($($arg:tt)*) => {{
-            let mut cons = crate::console::CONSOLE.lock().unwrap();
-            let log = format!($($arg)*);
-            for line in log.split("\n") {
-                cons.push_event(format!("\x1B[90m{line}\x1B[0m"));
-            }
+            crate::console::log_str(&format!($($arg)*), "[90m");
     }};
 }
+
+#[allow(unused)]
+macro_rules! error {
+    ($($arg:tt)*) => {{
+            crate::console::log_str(&format!($($arg)*), "[31m");
+    }};
+}
+
 macro_rules! log {
     ($($arg:tt)*) => {{
-            let mut cons = crate::console::CONSOLE.lock().unwrap();
-            let log = format!($($arg)*);
-            for line in log.split("\n") {
-                cons.push_event(line.to_string());
-            }
+            crate::console::log_str(&format!($($arg)*), "[0m");
     }};
 }
+
 macro_rules! warning {
     ($($arg:tt)*) => {{
-            let mut cons = crate::console::CONSOLE.lock().unwrap();
-            let log = format!($($arg)*);
-            for line in log.split("\n") {
-                cons.push_event(format!("\x1B[33m{line}\x1B[0m"));
-            }
-    }};
-}
-macro_rules! _error {
-    ($($arg:tt)*) => {{
-            let mut cons = crate::console::CONSOLE.lock().unwrap();
-            let log = format!($($arg)*);
-            for line in log.split("\n") {
-                cons.push_event(format!("\x1B[31m{line}\x1B[0m"));
-            }
+            crate::console::log_str(&format!($($arg)*), "[33m");
     }};
 }
 
-pub(crate) use {debug, log, warning};
-
-pub fn render(server: &Server) {
-    let cons = CONSOLE.lock().unwrap();
-    cons.render(server);
-}
+#[allow(unused)]
+pub(crate) use {debug, error, log, warning};

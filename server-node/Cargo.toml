@@ -10,6 +10,7 @@ ciborium = "0.2.2"
 serde = { version = "1.0.215", features = ["derive"] }
 toml = "0.8.19"
 terminal_size = "0.4.1"
+dhcp-message = { path = "../dhcp-message" }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [

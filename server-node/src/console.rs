@@ -2,38 +2,9 @@
 //! Renders server's internal state and latest messages in a consistent way
 //! Intended to be used via the global static [`CONSOLE`] and the `log`-macro.
 
-use crate::Server;
-use std::{collections::VecDeque, env, fmt::Display, io::Write, sync::Mutex, time::SystemTime};
+use crate::server::Server;
+use std::{collections::VecDeque, env, io::Write, sync::Mutex, time::SystemTime};
 use terminal_size::{terminal_size, Height};
-
-impl Display for Server {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let write_label = |f: &mut std::fmt::Formatter<'_>, label| write!(f, "    {label:<16} ");
-
-        let title = format!(
-            "Server {} listening on {}",
-            self.config.id, self.config.address_private
-        );
-        let hline = title.chars().map(|_| '-').collect::<String>();
-        writeln!(f, "{title}\n{hline}")?;
-
-        write_label(f, "Coordinator")?;
-        if let Some(coordinator) = self.coordinator_id {
-            writeln!(f, "{coordinator}",)?;
-        } else {
-            writeln!(f, "Unknown",)?;
-        }
-        write_label(f, "Active peers")?;
-        for peer in &self.peers {
-            write!(f, "{peer} ")?;
-        }
-        writeln!(f)?;
-        write_label(f, "Current role")?;
-        writeln!(f, "{:?}", self.local_role)?;
-
-        writeln!(f, "{hline}")
-    }
-}
 
 pub struct Console {
     history_len: usize,

@@ -1,9 +1,11 @@
 use crate::{
+    config::Config,
     console,
     message::{self, Message},
-    ServerThreadMessage,
+    server::ServerThreadMessage,
 };
 use std::{
+    error::Error,
     fmt::Display,
     net::TcpStream,
     sync::mpsc::{self, Receiver, Sender},
@@ -55,6 +57,36 @@ impl Peer {
             write_thread: thread::spawn(move || {
                 Self::write_thread_fn(stream_write, rx, heartbeat_timeout)
             }),
+        }
+    }
+
+    pub fn start_handshake(
+        stream: TcpStream,
+        config: &Config,
+        server_tx: Sender<ServerThreadMessage>,
+    ) -> Result<Peer, Box<dyn Error>> {
+        let result = message::send(&stream, &Message::Join(config.id));
+        match result {
+            Ok(_) => {
+                let message = message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
+
+                match message {
+                    Message::JoinAck(peer_id) => {
+                        console::log!("Connected to peer {peer_id}");
+                        Ok(Peer::new(
+                            stream,
+                            peer_id,
+                            server_tx,
+                            config.heartbeat_timeout,
+                        ))
+                    }
+                    _ => panic!("Peer responded to Join with something other than JoinAck"),
+                }
+            }
+            Err(e) => {
+                console::log!("{e:?}");
+                Err(e.into())
+            }
         }
     }
 

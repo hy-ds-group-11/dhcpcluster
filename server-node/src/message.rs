@@ -6,7 +6,7 @@
 //!
 //! Jump to [`Message`] for the server-to-server message definition.
 
-use crate::{peer::PeerId, Lease};
+use crate::{dhcp::Lease, peer::PeerId};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self},

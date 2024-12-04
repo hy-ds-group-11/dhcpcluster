@@ -1,6 +1,6 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
-use server_node::{config::Config, Server};
+use server_node::{config::Config, server::Server};
 use std::{
     error::Error,
     net::TcpListener,

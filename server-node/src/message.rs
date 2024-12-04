@@ -6,7 +6,7 @@
 //!
 //! Jump to [`Message`] for the server-to-server message definition.
 
-use crate::Lease;
+use crate::{peer::PeerId, Lease};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self},
@@ -17,8 +17,8 @@ use std::{
 /// # A server-to-server message
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Message {
-    Join(u32),
-    JoinAck(u32),
+    Join(PeerId),
+    JoinAck(PeerId),
     Heartbeat,
     Election,
     Okay,

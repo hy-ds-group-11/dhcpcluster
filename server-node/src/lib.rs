@@ -13,11 +13,13 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
 pub mod config;
+pub mod console;
 pub mod message;
 pub mod peer;
 
 use crate::{config::Config, peer::Peer};
 use message::Message;
+use peer::PeerId;
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -42,18 +44,22 @@ pub struct Lease {
     expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
+#[derive(Debug)]
 pub enum ServerThreadMessage {
     NewConnection(TcpStream),
-    PeerLost(u32),
-    ProtocolMessage(Message),
+    PeerLost(PeerId),
+    ElectionTimeout,
+    ProtocolMessage { sender_id: PeerId, message: Message },
 }
 
 /// The distributed DHCP server
+#[derive(Debug)]
 pub struct Server {
+    pub start_time: SystemTime,
     config: Config,
     rx: Option<Receiver<ServerThreadMessage>>,
     tx: Sender<ServerThreadMessage>,
-    coordinator_id: Option<u32>,
+    coordinator_id: Option<PeerId>,
     #[allow(dead_code)]
     leases: Vec<Lease>,
     peers: Vec<Peer>,
@@ -78,14 +84,15 @@ impl Server {
                     let result = Self::start_handshake(stream, &config, tx.clone());
                     match result {
                         Ok(peer) => peers.push(peer),
-                        Err(e) => eprintln!("{e:?}"),
+                        Err(e) => console::log!("{e:?}"),
                     }
                 }
-                Err(e) => eprintln!("{e:?}"),
+                Err(e) => console::log!("{e:?}"),
             }
         }
 
         Self {
+            start_time: SystemTime::now(),
             config,
             rx: Some(rx),
             tx,
@@ -101,6 +108,9 @@ impl Server {
     /// This function may return, but only in error situations. Error handling is TBD and WIP.
     /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
     pub fn start(mut self, peer_listener: TcpListener) -> Result<(), Box<dyn Error>> {
+        // Cluster configuration change, start election (TODO, properly consider when first election should be held)
+        self.start_election();
+
         let server_tx = self.tx.clone();
         let peer_listener_thread =
             thread::spawn(move || Self::listen_nodes(peer_listener, server_tx));
@@ -116,15 +126,18 @@ impl Server {
             match message {
                 NewConnection(tcp_stream) => self.answer_handshake(tcp_stream),
                 PeerLost(peer_id) => self.remove_peer(peer_id),
-                ProtocolMessage(protocol_message) => match protocol_message {
-                    Election => todo!(),
-                    Okay => todo!(),
-                    Coordinator => todo!(),
+                ElectionTimeout => self.finish_election(),
+                ProtocolMessage { sender_id, message } => match message {
+                    Heartbeat => console::log!("Received heartbeat from {sender_id}"),
+                    Election => self.handle_election(sender_id, &message),
+                    Okay => self.handle_okay(sender_id, &message),
+                    Coordinator => self.handle_coordinator(sender_id),
                     Add(lease) => todo!(),
                     Update(lease) => todo!(),
-                    _ => panic!("Server received unexpected message {protocol_message:?}"),
+                    _ => panic!("Server received unexpected {message:?} from {sender_id}"),
                 },
             }
+            console::render(&self);
         }
 
         peer_listener_thread.join().map_err(|e| {
@@ -136,13 +149,42 @@ impl Server {
         })
     }
 
+    fn handle_election(&mut self, sender_id: PeerId, message: &Message) {
+        console::log!("Peer {sender_id} invited {message:?}");
+        if sender_id < self.config.id {
+            console::log!("Received Election from lower id");
+            self.peer(sender_id).unwrap().send_message(Message::Okay);
+            self.start_election();
+        }
+    }
+
+    fn handle_okay(&mut self, sender_id: PeerId, message: &Message) {
+        assert!(sender_id > self.config.id);
+        console::log!("Peer {sender_id}: {message:?}, ");
+        if self.local_role == ServerRole::WaitingForElection {
+            console::log!("Stepping down to Follower");
+            self.local_role = ServerRole::Follower;
+        } else {
+            console::log!("Already stepped down");
+        }
+    }
+
+    fn handle_coordinator(&mut self, sender_id: PeerId) {
+        console::log!("Recognizing {sender_id} as Coordinator");
+        self.coordinator_id = Some(sender_id);
+        self.local_role = ServerRole::Follower;
+        if sender_id < self.config.id {
+            self.start_election();
+        }
+    }
+
     fn listen_nodes(listener: TcpListener, server_tx: Sender<ServerThreadMessage>) {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::NewConnection(stream))
                     .unwrap(),
-                Err(e) => eprintln!("{e:?}"),
+                Err(e) => console::log!("{e:?}"),
             }
         }
     }
@@ -157,18 +199,21 @@ impl Server {
             Ok(_) => {
                 let message = message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
 
-                match dbg!(message) {
-                    Message::JoinAck(peer_id) => Ok(Peer::new(
-                        stream,
-                        peer_id,
-                        server_tx,
-                        config.heartbeat_timeout,
-                    )),
+                match message {
+                    Message::JoinAck(peer_id) => {
+                        console::log!("Connected to peer {peer_id}");
+                        Ok(Peer::new(
+                            stream,
+                            peer_id,
+                            server_tx,
+                            config.heartbeat_timeout,
+                        ))
+                    }
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
                 }
             }
             Err(e) => {
-                eprintln!("{e:?}");
+                console::log!("{e:?}");
                 Err(e.into())
             }
         }
@@ -182,6 +227,7 @@ impl Server {
                 let result = message::send(&stream, &Message::JoinAck(self.config.id));
                 match result {
                     Ok(_) => {
+                        console::log!("Peer {peer_id} joined");
                         self.peers.push(Peer::new(
                             stream,
                             peer_id,
@@ -189,14 +235,14 @@ impl Server {
                             self.config.heartbeat_timeout,
                         ));
                     }
-                    Err(e) => eprintln!("{e:?}"),
+                    Err(e) => console::log!("{e:?}"),
                 }
             }
             _ => panic!("First message of peer wasn't Join"),
         }
     }
 
-    fn remove_peer(&mut self, peer_id: u32) {
+    fn remove_peer(&mut self, peer_id: PeerId) {
         self.peers.retain(|peer| peer.id != peer_id);
 
         if Some(peer_id) == self.coordinator_id {
@@ -204,14 +250,17 @@ impl Server {
         }
     }
 
+    fn peer(&self, peer_id: PeerId) -> Option<&Peer> {
+        self.peers.iter().find(|peer| peer.id == peer_id)
+    }
+
     /// Send [`Message::Election`] to all server peers with higher ids than this server.
     ///
-    /// This function blocks until the bully algorithm timeout expires.
+    /// This function starts a timer thread which sleeps until the bully algorithm timeout expires.
+    /// The timer triggers a [`ServerThreadMessage::ElectionTimeout`] to the the server thread.
     fn start_election(&mut self) {
-        // TODO Move the waiting into a separate thread so we don't block the main server thread
         use ServerRole::*;
 
-        assert_eq!(self.local_role, Follower);
         self.local_role = WaitingForElection;
 
         for peer in &self.peers {
@@ -220,9 +269,21 @@ impl Server {
             }
         }
 
-        // Wait for peers to vote.
-        thread::sleep(self.config.heartbeat_timeout);
+        let dur = self.config.heartbeat_timeout;
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            // Wait for peers to vote.
+            console::log!("Starting election wait");
+            thread::sleep(dur);
+            console::log!("Election wait over");
+            tx.send(ServerThreadMessage::ElectionTimeout).unwrap();
+        }); // Drop JoinHandle, detaching election thread from server thread
+    }
 
+    /// Inspect current server role. Become leader and send [`Message::Coordinator`] to all peers
+    /// if no event has reset the server role back to [`ServerRole::Follower`].
+    fn finish_election(&mut self) {
+        use ServerRole::*;
         match self.local_role {
             WaitingForElection => {
                 self.local_role = Coordinator;
@@ -231,9 +292,11 @@ impl Server {
                     peer.send_message(Message::Coordinator);
                 }
             }
-            Coordinator => unreachable!(),
+            Coordinator => {
+                console::log!("Already Coordinator when election ended");
+            }
             Follower => {
-                println!("Received OK during election");
+                console::log!("Received OK during election");
             }
         }
     }

@@ -71,6 +71,7 @@ impl Server {
     /// Failed handshakes are ignored, since they might be nodes that are starting later.
     /// After connecting to peers, you probably want to call [`Server::start`].
     pub fn connect(config: Config) -> Self {
+        let start_time = SystemTime::now();
         let coordinator_id = None;
         let leases = Vec::new();
         let mut peers = Vec::new();
@@ -84,15 +85,17 @@ impl Server {
                     let result = Self::start_handshake(stream, &config, tx.clone());
                     match result {
                         Ok(peer) => peers.push(peer),
-                        Err(e) => console::log!("{e:?}"),
+                        Err(e) => console::warning!("{e:?}"),
                     }
                 }
-                Err(e) => console::log!("{e:?}"),
+                Err(e) => {
+                    console::warning!("Connection refused to peer {peer_address}\n{e:?}");
+                }
             }
         }
 
         Self {
-            start_time: SystemTime::now(),
+            start_time,
             config,
             rx: Some(rx),
             tx,
@@ -128,7 +131,7 @@ impl Server {
                 PeerLost(peer_id) => self.remove_peer(peer_id),
                 ElectionTimeout => self.finish_election(),
                 ProtocolMessage { sender_id, message } => match message {
-                    Heartbeat => console::log!("Received heartbeat from {sender_id}"),
+                    Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
                     Election => self.handle_election(sender_id, &message),
                     Okay => self.handle_okay(sender_id, &message),
                     Coordinator => self.handle_coordinator(sender_id),
@@ -184,7 +187,7 @@ impl Server {
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::NewConnection(stream))
                     .unwrap(),
-                Err(e) => console::log!("{e:?}"),
+                Err(e) => console::warning!("{e:?}"),
             }
         }
     }
@@ -212,10 +215,7 @@ impl Server {
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
                 }
             }
-            Err(e) => {
-                console::log!("{e:?}");
-                Err(e.into())
-            }
+            Err(e) => Err(format!("Handshake failed! {e:?}").into()),
         }
     }
 
@@ -235,7 +235,7 @@ impl Server {
                             self.config.heartbeat_timeout,
                         ));
                     }
-                    Err(e) => console::log!("{e:?}"),
+                    Err(e) => console::warning!("{e:?}"),
                 }
             }
             _ => panic!("First message of peer wasn't Join"),

@@ -61,7 +61,7 @@ impl Peer {
     pub fn send_message(&self, message: Message) {
         self.tx
             .send(SenderThreadMessage::Relay(message))
-            .unwrap_or_else(|e| console::log!("{e:?}"));
+            .unwrap_or_else(|e| console::warning!("{e:?}"));
     }
 
     fn read_thread_fn(

@@ -18,7 +18,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok(config) => config,
         Err(_) => Config::load_toml_file(Path::new("server-node").join(config_file_path))?,
     };
-    dbg!(&config);
 
     let peer_listener = TcpListener::bind(config.address_private)?;
     let server = Server::connect(config);

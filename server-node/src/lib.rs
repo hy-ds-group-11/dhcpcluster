@@ -129,35 +129,9 @@ impl Server {
                 ElectionTimeout => self.finish_election(),
                 ProtocolMessage { sender_id, message } => match message {
                     Heartbeat => console::log!("Received heartbeat from {sender_id}"),
-                    Election => {
-                        console::log!("Peer {sender_id} invited {message:?}");
-                        if sender_id < self.config.id {
-                            console::log!("Bullying.");
-                            self.peer(sender_id).unwrap().send_message(Message::Okay);
-                        }
-                    }
-                    Okay => {
-                        assert!(sender_id > self.config.id);
-                        console::log!("Peer {sender_id}: {message:?}, ");
-                        if self.local_role == ServerRole::WaitingForElection {
-                            console::log!("stepping down to follower");
-                            self.local_role = ServerRole::Follower;
-                        } else {
-                            console::log!("already stepped down");
-                        }
-                    }
-                    Coordinator => {
-                        // TODO this assertion will be hit when quickly starting nodes in increasing id order
-                        // This is because the later starting, higher id peer won't know about the ongoing election
-                        assert!(sender_id > self.config.id);
-                        //assert_ne!(self.local_role, ServerRole::Coordinator);
-                        console::log!("Recognizing {sender_id} as coordinator");
-                        self.coordinator_id = Some(sender_id);
-                        // TODO consider if this step-down should happen at an earlier point,
-                        // such as when cluster changes, and if coordinator_id should be reset
-                        // to None at some earlier point (when noticed election in progress?)
-                        self.local_role = ServerRole::Follower;
-                    }
+                    Election => self.handle_election(sender_id, &message),
+                    Okay => self.handle_okay(sender_id, &message),
+                    Coordinator => self.handle_coordinator(sender_id),
                     Add(lease) => todo!(),
                     Update(lease) => todo!(),
                     _ => panic!("Server received unexpected {message:?} from {sender_id}"),
@@ -173,6 +147,35 @@ impl Server {
             )
             .into()
         })
+    }
+
+    fn handle_election(&mut self, sender_id: PeerId, message: &Message) {
+        console::log!("Peer {sender_id} invited {message:?}");
+        if sender_id < self.config.id {
+            console::log!("Received Election from lower id");
+            self.peer(sender_id).unwrap().send_message(Message::Okay);
+            self.start_election();
+        }
+    }
+
+    fn handle_okay(&mut self, sender_id: PeerId, message: &Message) {
+        assert!(sender_id > self.config.id);
+        console::log!("Peer {sender_id}: {message:?}, ");
+        if self.local_role == ServerRole::WaitingForElection {
+            console::log!("Stepping down to Follower");
+            self.local_role = ServerRole::Follower;
+        } else {
+            console::log!("Already stepped down");
+        }
+    }
+
+    fn handle_coordinator(&mut self, sender_id: PeerId) {
+        console::log!("Recognizing {sender_id} as Coordinator");
+        self.coordinator_id = Some(sender_id);
+        self.local_role = ServerRole::Follower;
+        if sender_id < self.config.id {
+            self.start_election();
+        }
     }
 
     fn listen_nodes(listener: TcpListener, server_tx: Sender<ServerThreadMessage>) {
@@ -258,7 +261,6 @@ impl Server {
     fn start_election(&mut self) {
         use ServerRole::*;
 
-        assert_eq!(self.local_role, Follower);
         self.local_role = WaitingForElection;
 
         for peer in &self.peers {
@@ -290,7 +292,9 @@ impl Server {
                     peer.send_message(Message::Coordinator);
                 }
             }
-            Coordinator => unreachable!(),
+            Coordinator => {
+                console::log!("Already Coordinator when election ended");
+            }
             Follower => {
                 console::log!("Received OK during election");
             }

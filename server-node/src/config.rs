@@ -6,9 +6,16 @@
 //! Jump to [`Config::load_toml_file`] for configuration file loading.
 
 use serde::Deserialize;
-use std::{error::Error, ffi::OsStr, net::SocketAddr, path::Path, str::FromStr, time::Duration};
+use std::{
+    error::Error,
+    ffi::OsStr,
+    net::{Ipv4Addr, SocketAddr},
+    path::Path,
+    str::FromStr,
+    time::Duration,
+};
 
-use crate::peer::PeerId;
+use crate::{dhcp::DhcpPool, peer::PeerId};
 
 #[derive(Deserialize, Debug)]
 struct ConfigFile {
@@ -16,6 +23,8 @@ struct ConfigFile {
     peers: Vec<SocketAddr>,
     id: PeerId,
     heartbeat_timeout: u64,
+    net: Ipv4Addr,
+    prefix_length: u32,
     // TODO DHCP interface?
 }
 
@@ -36,6 +45,7 @@ pub struct Config {
     pub peers: Vec<SocketAddr>,
     pub id: PeerId,
     pub heartbeat_timeout: Duration,
+    pub dhcp_pool: DhcpPool,
 }
 
 impl From<ConfigFile> for Config {
@@ -48,6 +58,8 @@ impl From<ConfigFile> for Config {
             peers,
             id,
             heartbeat_timeout,
+            net,
+            prefix_length,
         }: ConfigFile,
     ) -> Self {
         Self {
@@ -55,6 +67,7 @@ impl From<ConfigFile> for Config {
             peers,
             id,
             heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
+            dhcp_pool: DhcpPool::from_cidr(net, prefix_length),
         }
     }
 }

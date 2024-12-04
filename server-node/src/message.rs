@@ -6,7 +6,10 @@
 //!
 //! Jump to [`Message`] for the server-to-server message definition.
 
-use crate::{dhcp::Lease, peer::PeerId};
+use crate::{
+    dhcp::{DhcpPool, Lease},
+    peer::PeerId,
+};
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self},
@@ -25,6 +28,7 @@ pub enum Message {
     Coordinator,
     Add(Lease),
     Update(Lease),
+    SetPool(DhcpPool),
 }
 
 /// # Read a message from a [`TcpStream`].

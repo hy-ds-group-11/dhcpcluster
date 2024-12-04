@@ -2,3 +2,5 @@ address_private = "0.0.0.0:1234"
 id = 0
 peers = ["0.0.0.0:1235", "0.0.0.0:1236"]
 heartbeat_timeout = 2000
+net = "10.0.0.0"
+prefix_length = 24

@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     console,
-    dhcp::Lease,
+    dhcp::{DhcpPool, Lease},
     message::{self, Message},
     peer::{Peer, PeerId},
 };
@@ -39,6 +39,7 @@ pub struct Server {
     coordinator_id: Option<PeerId>,
     #[allow(dead_code)]
     leases: Vec<Lease>,
+    dhcp_pool: DhcpPool,
     peers: Vec<Peer>,
     local_role: ServerRole,
 }
@@ -51,6 +52,7 @@ impl Server {
         let start_time = SystemTime::now();
         let coordinator_id = None;
         let leases = Vec::new();
+        let dhcp_pool = config.dhcp_pool.clone();
         let mut peers = Vec::new();
         let local_role = ServerRole::Follower;
 
@@ -75,6 +77,7 @@ impl Server {
             tx,
             coordinator_id,
             leases,
+            dhcp_pool,
             peers,
             local_role,
             start_time,
@@ -112,6 +115,7 @@ impl Server {
                     Coordinator => self.handle_coordinator(sender_id),
                     Add(lease) => todo!(),
                     Update(lease) => todo!(),
+                    SetPool(dhcp_pool) => self.dhcp_pool = dhcp_pool,
                     _ => panic!("Server received unexpected {message:?} from {sender_id}"),
                 },
             }
@@ -234,11 +238,7 @@ impl Server {
         use ServerRole::*;
         match self.local_role {
             WaitingForElection => {
-                self.local_role = Coordinator;
-                self.coordinator_id = Some(self.config.id);
-                for peer in &self.peers {
-                    peer.send_message(Message::Coordinator);
-                }
+                self.become_coordinator();
             }
             Coordinator => {
                 console::log!("Already Coordinator when election ended");
@@ -246,6 +246,24 @@ impl Server {
             Follower => {
                 console::log!("Received OK during election");
             }
+        }
+    }
+
+    fn become_coordinator(&mut self) {
+        self.local_role = ServerRole::Coordinator;
+        self.coordinator_id = Some(self.config.id);
+        for peer in &self.peers {
+            peer.send_message(Message::Coordinator);
+        }
+
+        for (pool, peer) in self
+            .config
+            .dhcp_pool
+            .divide(self.peers.len() as u32)
+            .iter()
+            .zip(self.peers.iter())
+        {
+            peer.send_message(Message::SetPool(pool.clone()));
         }
     }
 }

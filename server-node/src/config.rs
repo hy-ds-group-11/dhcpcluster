@@ -25,7 +25,8 @@ struct ConfigFile {
     heartbeat_timeout: u64,
     net: Ipv4Addr,
     prefix_length: u32,
-    // TODO DHCP interface?
+    dhcp_address: SocketAddr,
+    thread_count: usize,
 }
 
 impl FromStr for ConfigFile {
@@ -46,6 +47,8 @@ pub struct Config {
     pub id: PeerId,
     pub heartbeat_timeout: Duration,
     pub dhcp_pool: DhcpPool,
+    pub dhcp_address: SocketAddr,
+    pub thread_count: usize,
 }
 
 impl From<ConfigFile> for Config {
@@ -60,6 +63,8 @@ impl From<ConfigFile> for Config {
             heartbeat_timeout,
             net,
             prefix_length,
+            dhcp_address,
+            thread_count,
         }: ConfigFile,
     ) -> Self {
         Self {
@@ -68,6 +73,8 @@ impl From<ConfigFile> for Config {
             id,
             heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
             dhcp_pool: DhcpPool::from_cidr(net, prefix_length),
+            dhcp_address,
+            thread_count,
         }
     }
 }

@@ -1,14 +1,17 @@
+use dhcp_message::{DhcpClientMessage, DhcpServerMessage};
+
 use crate::{
     config::Config,
     console,
     dhcp::{DhcpPool, Lease},
     message::{self, Message},
     peer::{Peer, PeerId},
+    thread_pool::ThreadPool,
 };
 use std::{
     error::Error,
     fmt::Display,
-    net::{TcpListener, TcpStream},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     sync::mpsc::{channel, Receiver, Sender},
     thread,
     time::SystemTime,
@@ -19,7 +22,19 @@ pub enum ServerThreadMessage {
     NewConnection(TcpStream),
     PeerLost(PeerId),
     ElectionTimeout,
-    ProtocolMessage { sender_id: PeerId, message: Message },
+    ProtocolMessage {
+        sender_id: PeerId,
+        message: Message,
+    },
+    OfferLease {
+        mac_address: [u8; 6],
+        tx: Sender<(Lease, u32)>,
+    },
+    ConfirmLease {
+        mac_address: [u8; 6],
+        ip: Ipv4Addr,
+        tx: Sender<bool>,
+    },
 }
 
 #[derive(Debug, PartialEq)]
@@ -90,13 +105,19 @@ impl Server {
     ///
     /// This function may return, but only in error situations. Error handling is TBD and WIP.
     /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
-    pub fn start(mut self, peer_listener: TcpListener) -> Result<(), Box<dyn Error>> {
-        let server_tx = self.tx.clone();
+    pub fn start(
+        mut self,
+        peer_listener: TcpListener,
+        client_listener: TcpListener,
+    ) -> Result<(), Box<dyn Error>> {
+        let peer_tx = self.tx.clone();
         let peer_listener_thread =
-            thread::spawn(move || Self::listen_nodes(peer_listener, server_tx));
+            thread::spawn(move || Self::listen_nodes(peer_listener, peer_tx));
 
-        // TODO: start client listener thread. Using scoped threads here may make the code look nicer,
-        // decide on that later.
+        let client_tx = self.tx.clone();
+        let client_listener_thread = thread::spawn(move || {
+            Self::listen_clients(client_listener, client_tx, self.config.thread_count)
+        });
 
         // Only node in cluster, become coordinator
         if self.peers.is_empty() {
@@ -109,6 +130,7 @@ impl Server {
         let rx = self.rx.take().unwrap();
         use ServerThreadMessage::*;
         for message in rx.iter() {
+            #[allow(unused)]
             match message {
                 NewConnection(tcp_stream) => self.answer_handshake(tcp_stream),
                 PeerLost(peer_id) => self.remove_peer(peer_id),
@@ -116,17 +138,112 @@ impl Server {
                 ProtocolMessage { sender_id, message } => {
                     self.handle_protocol_message(sender_id, message)
                 }
+                // TODO: Implement lease handling here
+                OfferLease { mac_address, tx } => {}
+                ConfirmLease {
+                    mac_address,
+                    tx,
+                    ip,
+                } => {}
             }
             console::render(self.start_time, &format!("{self}"));
         }
 
-        peer_listener_thread.join().map_err(|e| {
+        peer_listener_thread.join().map_err(|e| -> Box<dyn Error> {
             format!(
                 "Node listener thread panicked, Err: {:?}",
                 e.downcast_ref::<&str>()
             )
             .into()
+        })?;
+
+        client_listener_thread.join().map_err(|e| {
+            format!(
+                "Client listener thread panicked, Err: {:?}",
+                e.downcast_ref::<&str>()
+            )
+            .into()
         })
+    }
+
+    fn serve_client(stream: TcpStream, server_tx: Sender<ServerThreadMessage>) {
+        let result = DhcpClientMessage::recv(&stream);
+        match result {
+            Ok(DhcpClientMessage::Discover { mac_address }) => {
+                Self::handle_discover(stream, server_tx, mac_address)
+            }
+            Ok(DhcpClientMessage::Request { mac_address, ip }) => {
+                Self::handle_renew(stream, server_tx, mac_address, ip)
+            }
+            Err(e) => console::warning!("Client didn't follow protocol: {e}"),
+        }
+    }
+
+    fn handle_discover(
+        stream: TcpStream,
+        server_tx: Sender<ServerThreadMessage>,
+        mac_address: [u8; 6],
+    ) {
+        let (tx, rx) = channel::<(Lease, u32)>();
+        server_tx
+            .send(ServerThreadMessage::OfferLease { mac_address, tx })
+            .unwrap();
+        let (offer, subnet_mask) = rx.recv().unwrap();
+        let ip = offer.lease_address;
+        let lease_time = offer
+            .expiry_timestamp
+            .duration_since(SystemTime::now())
+            .unwrap()
+            .as_secs() as u32;
+        DhcpServerMessage::send(
+            &stream,
+            &DhcpServerMessage::Offer {
+                ip,
+                lease_time,
+                subnet_mask,
+            },
+        )
+        .unwrap();
+        let result = DhcpClientMessage::recv(&stream);
+        let (tx, rx) = channel::<bool>();
+        match result {
+            Ok(DhcpClientMessage::Request { mac_address, ip }) => {
+                server_tx
+                    .send(ServerThreadMessage::ConfirmLease {
+                        mac_address,
+                        ip,
+                        tx,
+                    })
+                    .unwrap();
+            }
+            _ => console::warning!("Client didn't follow protocol!"),
+        }
+        if rx.recv().unwrap() {
+            DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack).unwrap()
+        } else {
+            DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap()
+        }
+    }
+
+    fn handle_renew(
+        stream: TcpStream,
+        server_tx: Sender<ServerThreadMessage>,
+        mac_address: [u8; 6],
+        ip: Ipv4Addr,
+    ) {
+        let (tx, rx) = channel::<bool>();
+        server_tx
+            .send(ServerThreadMessage::ConfirmLease {
+                mac_address,
+                ip,
+                tx,
+            })
+            .unwrap();
+        if rx.recv().unwrap() {
+            DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack).unwrap()
+        } else {
+            DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap()
+        }
     }
 
     fn handle_protocol_message(&mut self, sender_id: PeerId, message: Message) {
@@ -192,6 +309,23 @@ impl Server {
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::NewConnection(stream))
                     .unwrap(),
+                Err(e) => console::warning!("{e:?}"),
+            }
+        }
+    }
+
+    fn listen_clients(
+        listener: TcpListener,
+        server_tx: Sender<ServerThreadMessage>,
+        thread_count: usize,
+    ) {
+        let thread_pool = ThreadPool::new(thread_count);
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let tx = server_tx.clone();
+                    thread_pool.execute(move || Self::serve_client(stream, tx));
+                }
                 Err(e) => console::warning!("{e:?}"),
             }
         }

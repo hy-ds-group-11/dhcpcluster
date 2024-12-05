@@ -4,3 +4,5 @@ peers = ["0.0.0.0:1234", "0.0.0.0:1235"]
 heartbeat_timeout = 2000
 net = "10.0.0.0"
 prefix_length = 24
+dhcp_address = "127.0.1.3:4321"
+thread_count = 4

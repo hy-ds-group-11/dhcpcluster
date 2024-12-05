@@ -8,7 +8,7 @@ use crate::{
 use std::{
     error::Error,
     fmt::Display,
-    net::{Ipv4Addr, TcpListener, TcpStream},
+    net::{TcpListener, TcpStream},
     sync::mpsc::{channel, Receiver, Sender},
     thread,
     time::SystemTime,
@@ -146,11 +146,7 @@ impl Server {
     }
 
     fn handle_set_pool(&mut self, dhcp_pool: DhcpPool) {
-        console::log!(
-            "Set pool to {} - {}",
-            Ipv4Addr::from_bits(dhcp_pool.start),
-            Ipv4Addr::from_bits(dhcp_pool.end)
-        );
+        console::log!("Set pool to {dhcp_pool}");
         self.dhcp_pool = dhcp_pool;
     }
 
@@ -360,6 +356,10 @@ impl Display for Server {
         // Role
         write_label(f, "Current role")?;
         writeln!(f, "{:?}", self.local_role)?;
+
+        // Pool assignment
+        write_label(f, "Assigned range")?;
+        writeln!(f, "{}", self.dhcp_pool)?;
 
         writeln!(f, "{hline}")
     }

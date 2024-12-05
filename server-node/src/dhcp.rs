@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{net::Ipv4Addr, time::SystemTime};
+use std::{fmt::Display, net::Ipv4Addr, time::SystemTime};
 
 /// A DHCP Lease
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -40,5 +40,16 @@ impl DhcpPool {
         }
         pools[parts as usize - 1].end += diff % parts;
         pools
+    }
+}
+
+impl Display for DhcpPool {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} - {}",
+            Ipv4Addr::from_bits(self.start),
+            Ipv4Addr::from_bits(self.end)
+        )
     }
 }

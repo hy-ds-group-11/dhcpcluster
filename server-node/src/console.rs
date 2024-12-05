@@ -91,7 +91,9 @@ pub fn log_str(event: &str, style: &str) {
 
 macro_rules! debug {
     ($($arg:tt)*) => {{
-            crate::console::log_str(&format!($($arg)*), "[90m");
+            if std::env::var("SERVER_VERBOSE").is_ok() {
+                crate::console::log_str(&format!($($arg)*), "[90m");
+            }
     }};
 }
 

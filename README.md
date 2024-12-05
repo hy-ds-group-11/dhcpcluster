@@ -12,7 +12,9 @@ The software is currently _unimplemented_, but development work has started.
 
 [Design document :paperclip:](doc/design.md)
 
-[Rustdoc-generated server documentation :books:](https://hy-ds-group-11.github.io/dhcpcluster/server_node/index.html)
+[Server documentation :books:](https://hy-ds-group-11.github.io/dhcpcluster/server_node/index.html)
+
+[Client-server protocol documentation :books:](https://hy-ds-group-11.github.io/dhcpcluster/dhcp_message/index.html)
 
 ### Weekly notes :notebook_with_decorative_cover:
 
@@ -22,3 +24,4 @@ The software is currently _unimplemented_, but development work has started.
 | [46](doc/week46.md) | Design, documentation :closed_book: and server code :rocket:                     |
 | [47](doc/week47.md) | Server handshakes :raised_hands:, testing :white_check_mark: and groundwork      |
 | [48](doc/week48.md) | Peer heartbeat messages :revolving_hearts:, thread shutdown :arrow_heading_down: |
+| [49](doc/week49.md) | Leader election :trophy:, address pool distribution :1234:                       |

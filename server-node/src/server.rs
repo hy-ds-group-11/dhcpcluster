@@ -107,30 +107,15 @@ impl Server {
         console::render(self.start_time, &format!("{self}"));
 
         let rx = self.rx.take().unwrap();
-        use Message::*;
         use ServerThreadMessage::*;
         for message in rx.iter() {
-            #[allow(unused_variables)]
             match message {
                 NewConnection(tcp_stream) => self.answer_handshake(tcp_stream),
                 PeerLost(peer_id) => self.remove_peer(peer_id),
                 ElectionTimeout => self.finish_election(),
-                ProtocolMessage { sender_id, message } => match message {
-                    Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
-                    Election => self.handle_election(sender_id, &message),
-                    Okay => self.handle_okay(sender_id, &message),
-                    Coordinator => self.handle_coordinator(sender_id),
-                    Add(lease) => todo!(),
-                    Update(lease) => todo!(),
-                    SetPool(dhcp_pool) => self.dhcp_pool = dhcp_pool,
-                    SetMajority(majority) => {
-                        if self.majority != majority {
-                            console::log!("{} majority", if majority { "Reached" } else { "Lost" });
-                            self.majority = majority;
-                        }
-                    }
-                    _ => panic!("Server received unexpected {message:?} from {sender_id}"),
-                },
+                ProtocolMessage { sender_id, message } => {
+                    self.handle_protocol_message(sender_id, message)
+                }
             }
             console::render(self.start_time, &format!("{self}"));
         }
@@ -142,6 +127,29 @@ impl Server {
             )
             .into()
         })
+    }
+
+    fn handle_protocol_message(&mut self, sender_id: PeerId, message: Message) {
+        use Message::*;
+        #[allow(unused_variables)]
+        match message {
+            Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
+            Election => self.handle_election(sender_id, &message),
+            Okay => self.handle_okay(sender_id, &message),
+            Coordinator => self.handle_coordinator(sender_id),
+            Add(lease) => todo!(),
+            Update(lease) => todo!(),
+            SetPool(dhcp_pool) => {
+                self.dhcp_pool = dhcp_pool;
+            }
+            SetMajority(majority) => {
+                if self.majority != majority {
+                    console::log!("{} majority", if majority { "Reached" } else { "Lost" });
+                    self.majority = majority;
+                }
+            }
+            _ => panic!("Server received unexpected {message:?} from {sender_id}"),
+        };
     }
 
     fn handle_election(&mut self, sender_id: PeerId, message: &Message) {

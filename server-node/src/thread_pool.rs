@@ -1,3 +1,4 @@
+use crate::console;
 use std::{
     sync::{mpsc, Arc, Mutex},
     thread,
@@ -53,7 +54,7 @@ impl Drop for ThreadPool {
         drop(self.sender.take());
 
         for worker in &mut self.workers {
-            println!("Shutting down worker {}", worker.id);
+            console::debug!("Shutting down worker {}", worker.id);
 
             if let Some(thread) = worker.thread.take() {
                 thread.join().unwrap();
@@ -75,12 +76,12 @@ impl Worker {
 
             match message {
                 Ok(job) => {
-                    println!("Worker {id} got a job; executing.");
+                    console::debug!("Worker {id} got a job; executing.");
 
                     job();
                 }
                 Err(_) => {
-                    println!("Worker {id} disconnected; shutting down.");
+                    console::debug!("Worker {id} disconnected; shutting down.");
                     break;
                 }
             }

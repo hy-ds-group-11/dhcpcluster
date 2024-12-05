@@ -12,8 +12,8 @@ pub struct Lease {
 /// IPv4 address pool to serve. `end` not included.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DhcpPool {
-    start: u32,
-    end: u32,
+    pub start: u32,
+    pub end: u32,
 }
 
 impl DhcpPool {

@@ -8,7 +8,7 @@ use crate::{
 use std::{
     error::Error,
     fmt::Display,
-    net::{TcpListener, TcpStream},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     sync::mpsc::{channel, Receiver, Sender},
     thread,
     time::SystemTime,
@@ -139,12 +139,19 @@ impl Server {
             Coordinator => self.handle_coordinator(sender_id),
             Add(lease) => todo!(),
             Update(lease) => todo!(),
-            SetPool(dhcp_pool) => {
-                self.dhcp_pool = dhcp_pool;
-            }
+            SetPool(dhcp_pool) => self.handle_set_pool(dhcp_pool),
             SetMajority(majority) => self.handle_majority(majority),
             _ => panic!("Server received unexpected {message:?} from {sender_id}"),
         };
+    }
+
+    fn handle_set_pool(&mut self, dhcp_pool: DhcpPool) {
+        console::log!(
+            "Set pool to {} - {}",
+            Ipv4Addr::from_bits(dhcp_pool.start),
+            Ipv4Addr::from_bits(dhcp_pool.end)
+        );
+        self.dhcp_pool = dhcp_pool;
     }
 
     fn handle_election(&mut self, sender_id: PeerId, message: &Message) {
@@ -297,10 +304,12 @@ impl Server {
         let mut pools_iter = pools.iter();
 
         // Set own pool
-        self.dhcp_pool = pools_iter
-            .next()
-            .expect("Pools should always exist")
-            .clone();
+        self.handle_set_pool(
+            pools_iter
+                .next()
+                .expect("Pools should always exist")
+                .clone(),
+        );
 
         for (pool, peer) in pools_iter.zip(self.peers.iter()) {
             peer.send_message(Message::SetPool(pool.clone()));

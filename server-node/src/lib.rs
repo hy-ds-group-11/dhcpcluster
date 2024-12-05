@@ -4,7 +4,7 @@
 //!
 //! For the protocol definition, look into the [`message`] module.
 //!
-//! The server architecture comprises of threads, which use blocking operations to communicate over [`TcpStream`]s.
+//! The server architecture comprises of threads, which use blocking operations to communicate over [`std::net::TcpStream`]s.
 //! There are two threads per active peer, one for receiving messages and one for sending messages.
 //! There is also a server logic thread, handling bookkeeping for the peer- and client events.
 //!

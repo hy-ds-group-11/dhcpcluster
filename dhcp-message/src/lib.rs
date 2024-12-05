@@ -1,3 +1,6 @@
+//! This crate defines a custom client-server (relay agent to cluster) protocol.
+//! In a final version of this software, this protocol should be replaced by the actual DHCP protocol.
+
 use ciborium::{de, ser};
 use serde::{Deserialize, Serialize};
 use std::{io::Read, net::Ipv4Addr};

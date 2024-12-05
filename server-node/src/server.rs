@@ -142,12 +142,7 @@ impl Server {
             SetPool(dhcp_pool) => {
                 self.dhcp_pool = dhcp_pool;
             }
-            SetMajority(majority) => {
-                if self.majority != majority {
-                    console::log!("{} majority", if majority { "Reached" } else { "Lost" });
-                    self.majority = majority;
-                }
-            }
+            SetMajority(majority) => self.handle_majority(majority),
             _ => panic!("Server received unexpected {message:?} from {sender_id}"),
         };
     }
@@ -178,6 +173,13 @@ impl Server {
         self.local_role = ServerRole::Follower;
         if sender_id < self.config.id {
             self.start_election();
+        }
+    }
+
+    fn handle_majority(&mut self, majority: bool) {
+        if self.majority != majority {
+            console::log!("{} majority", if majority { "Reached" } else { "Lost" });
+            self.majority = majority;
         }
     }
 
@@ -283,11 +285,8 @@ impl Server {
     fn become_coordinator(&mut self) {
         self.local_role = ServerRole::Coordinator;
         self.coordinator_id = Some(self.config.id);
-        self.majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
-        console::log!(
-            "{} majority",
-            if self.majority { "Reached" } else { "Lost" }
-        );
+        let majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
+        self.handle_majority(majority);
 
         for peer in &self.peers {
             peer.send_message(Message::Coordinator);

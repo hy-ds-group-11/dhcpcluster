@@ -89,15 +89,20 @@ impl Server {
     /// This function may return, but only in error situations. Error handling is TBD and WIP.
     /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
     pub fn start(mut self, peer_listener: TcpListener) -> Result<(), Box<dyn Error>> {
-        // Cluster configuration change, start election (TODO, properly consider when first election should be held)
-        self.start_election();
-
         let server_tx = self.tx.clone();
         let peer_listener_thread =
             thread::spawn(move || Self::listen_nodes(peer_listener, server_tx));
 
         // TODO: start client listener thread. Using scoped threads here may make the code look nicer,
         // decide on that later.
+
+        // Only node in cluster, become coordinator
+        if self.peers.is_empty() {
+            self.become_coordinator();
+        }
+
+        // Prevent program seemingly hanging when waiting for first message
+        console::render(self.start_time, &format!("{self}"));
 
         let rx = self.rx.take().unwrap();
         use Message::*;
@@ -192,10 +197,20 @@ impl Server {
             }
             _ => panic!("First message of peer wasn't Join"),
         }
+
+        // New peer joined, we want to inform it of the coordinator and reallocate the DHCP pool
+        if self.local_role == ServerRole::Coordinator {
+            self.become_coordinator();
+        }
     }
 
     fn remove_peer(&mut self, peer_id: PeerId) {
         self.peers.retain(|peer| peer.id != peer_id);
+
+        // Peer left, we want to confirm the coordinator and reallocate the DHCP pool
+        if self.local_role == ServerRole::Coordinator {
+            self.become_coordinator();
+        }
 
         if Some(peer_id) == self.coordinator_id {
             self.start_election();
@@ -256,10 +271,12 @@ impl Server {
             peer.send_message(Message::Coordinator);
         }
 
+        // TODO: Make sure we have a majority of all nodes!
+
         for (pool, peer) in self
             .config
             .dhcp_pool
-            .divide(self.peers.len() as u32)
+            .divide(self.peers.len() as u32 + 1) // +1 to account for the coordinator
             .iter()
             .zip(self.peers.iter())
         {

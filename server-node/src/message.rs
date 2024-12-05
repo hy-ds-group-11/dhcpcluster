@@ -29,6 +29,7 @@ pub enum Message {
     Add(Lease),
     Update(Lease),
     SetPool(DhcpPool),
+    SetMajority(bool),
 }
 
 /// # Read a message from a [`TcpStream`].

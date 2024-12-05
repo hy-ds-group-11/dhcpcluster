@@ -42,6 +42,7 @@ pub struct Server {
     dhcp_pool: DhcpPool,
     peers: Vec<Peer>,
     local_role: ServerRole,
+    majority: bool,
 }
 
 impl Server {
@@ -81,6 +82,7 @@ impl Server {
             peers,
             local_role,
             start_time,
+            majority: false,
         }
     }
 
@@ -121,6 +123,12 @@ impl Server {
                     Add(lease) => todo!(),
                     Update(lease) => todo!(),
                     SetPool(dhcp_pool) => self.dhcp_pool = dhcp_pool,
+                    SetMajority(majority) => {
+                        if self.majority != majority {
+                            console::log!("{} majority", if majority { "Reached" } else { "Lost" });
+                            self.majority = majority;
+                        }
+                    }
                     _ => panic!("Server received unexpected {message:?} from {sender_id}"),
                 },
             }
@@ -267,19 +275,27 @@ impl Server {
     fn become_coordinator(&mut self) {
         self.local_role = ServerRole::Coordinator;
         self.coordinator_id = Some(self.config.id);
+        self.majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
+        console::log!(
+            "{} majority",
+            if self.majority { "Reached" } else { "Lost" }
+        );
+
         for peer in &self.peers {
             peer.send_message(Message::Coordinator);
+            peer.send_message(Message::SetMajority(self.majority));
         }
 
-        // TODO: Make sure we have a majority of all nodes!
+        let pools = self.config.dhcp_pool.divide(self.peers.len() as u32 + 1); // +1 to account for the coordinator
+        let mut pools_iter = pools.iter();
 
-        for (pool, peer) in self
-            .config
-            .dhcp_pool
-            .divide(self.peers.len() as u32 + 1) // +1 to account for the coordinator
-            .iter()
-            .zip(self.peers.iter())
-        {
+        // Set own pool
+        self.dhcp_pool = pools_iter
+            .next()
+            .expect("Pools should always exist")
+            .clone();
+
+        for (pool, peer) in pools_iter.zip(self.peers.iter()) {
             peer.send_message(Message::SetPool(pool.clone()));
         }
     }

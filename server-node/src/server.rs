@@ -51,7 +51,7 @@ pub struct Server {
     rx: Option<Receiver<ServerThreadMessage>>,
     tx: Sender<ServerThreadMessage>,
     coordinator_id: Option<PeerId>,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Unimplemented")]
     leases: Vec<Lease>,
     dhcp_pool: DhcpPool,
     peers: Vec<Peer>,

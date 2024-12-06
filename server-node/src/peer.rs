@@ -21,9 +21,9 @@ pub type PeerId = u32;
 pub struct Peer {
     pub id: PeerId,
     tx: Sender<SenderThreadMessage>,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Unimplemented thread join handling")]
     read_thread: JoinHandle<()>,
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "Unimplemented thread join handling")]
     write_thread: JoinHandle<()>,
 }
 

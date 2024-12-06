@@ -1,13 +1,12 @@
-use dhcp_message::{DhcpClientMessage, DhcpServerMessage};
-
 use crate::{
     config::Config,
     console,
     dhcp::{DhcpPool, Lease},
-    message::{self, Message},
+    message::Message,
     peer::{Peer, PeerId},
     thread_pool::ThreadPool,
 };
+use protocol::{DhcpClientMessage, DhcpServerMessage, RecvCbor, SendCbor};
 use std::{
     error::Error,
     fmt::Display,
@@ -332,11 +331,11 @@ impl Server {
     }
 
     fn answer_handshake(&mut self, stream: TcpStream) {
-        let message = message::recv_timeout(&stream, self.config.heartbeat_timeout).unwrap();
+        let message = Message::recv_timeout(&stream, self.config.heartbeat_timeout).unwrap();
 
         match message {
             Message::Join(peer_id) => {
-                let result = message::send(&stream, &Message::JoinAck(self.config.id));
+                let result = Message::send(&stream, &Message::JoinAck(self.config.id));
                 match result {
                     Ok(_) => {
                         console::log!("Peer {peer_id} joined");

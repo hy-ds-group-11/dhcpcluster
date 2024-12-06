@@ -25,10 +25,10 @@ pub enum DhcpServerMessage {
     Nack,
 }
 
-impl DhcpClientMessage {
+pub trait RecvCbor: Sized + for<'a> Deserialize<'a> {
     /// # Read a message from a [`TcpStream`].
     /// This function can block the calling thread for the stream's current timeout setting (see [`TcpStream::set_read_timeout`]).
-    pub fn recv(stream: &TcpStream) -> Result<Self, ciborium::de::Error<Error>> {
+    fn recv(stream: &TcpStream) -> Result<Self, ciborium::de::Error<Error>> {
         ciborium::from_reader(stream)
     }
 
@@ -37,7 +37,7 @@ impl DhcpClientMessage {
     /// ## Concurrency
     /// This function may not be used concurrently with a stream that has been shared between different threads.
     /// Doing so may result in unexpected changes to the stream's timeout.
-    pub fn recv_timeout(
+    fn recv_timeout(
         stream: &TcpStream,
         timeout: Duration,
     ) -> Result<Self, ciborium::de::Error<Error>> {
@@ -47,38 +47,16 @@ impl DhcpClientMessage {
         stream.set_read_timeout(previous_timeout).unwrap();
         result
     }
+}
 
+pub trait SendCbor: Sized + Serialize {
     /// # Send a message over a [`TcpStream`]
-    pub fn send(stream: &TcpStream, message: &Self) -> Result<(), ciborium::ser::Error<Error>> {
+    fn send(stream: &TcpStream, message: &Self) -> Result<(), ciborium::ser::Error<Error>> {
         ciborium::into_writer(message, stream)
     }
 }
 
-impl DhcpServerMessage {
-    /// # Read a message from a [`TcpStream`].
-    /// This function can block the calling thread for the stream's current timeout setting (see [`TcpStream::set_read_timeout`]).
-    pub fn recv(stream: &TcpStream) -> Result<Self, ciborium::de::Error<Error>> {
-        ciborium::from_reader(stream)
-    }
-
-    /// # Read a message from a [`TcpStream`], with a timeout.
-    /// This function can block the calling thread for the specified timeout duration.
-    /// ## Concurrency
-    /// This function may not be used concurrently with a stream that has been shared between different threads.
-    /// Doing so may result in unexpected changes to the stream's timeout.
-    pub fn recv_timeout(
-        stream: &TcpStream,
-        timeout: Duration,
-    ) -> Result<Self, ciborium::de::Error<Error>> {
-        let previous_timeout = stream.read_timeout().unwrap();
-        stream.set_read_timeout(Some(timeout)).unwrap();
-        let result = Self::recv(stream);
-        stream.set_read_timeout(previous_timeout).unwrap();
-        result
-    }
-
-    /// # Send a message over a [`TcpStream`]
-    pub fn send(stream: &TcpStream, message: &Self) -> Result<(), ciborium::ser::Error<Error>> {
-        ciborium::into_writer(message, stream)
-    }
-}
+impl RecvCbor for DhcpClientMessage {}
+impl SendCbor for DhcpClientMessage {}
+impl RecvCbor for DhcpServerMessage {}
+impl SendCbor for DhcpServerMessage {}

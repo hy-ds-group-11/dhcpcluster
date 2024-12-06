@@ -1,6 +1,6 @@
 use std::net::Ipv4Addr;
 
-use dhcp_message::DhcpServerMessage;
+use protocol::DhcpServerMessage;
 
 #[allow(unused)]
 pub fn get_offer(mac_address: [u8; 6]) -> Option<DhcpServerMessage> {

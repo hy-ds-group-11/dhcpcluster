@@ -1,9 +1,5 @@
-use crate::{
-    config::Config,
-    console,
-    message::{self, Message},
-    server::ServerThreadMessage,
-};
+use crate::{config::Config, console, message::Message, server::ServerThreadMessage};
+use protocol::{RecvCbor, SendCbor};
 use std::{
     error::Error,
     fmt::Display,
@@ -65,10 +61,10 @@ impl Peer {
         config: &Config,
         server_tx: Sender<ServerThreadMessage>,
     ) -> Result<Peer, Box<dyn Error>> {
-        let result = message::send(&stream, &Message::Join(config.id));
+        let result = Message::send(&stream, &Message::Join(config.id));
         match result {
             Ok(_) => {
-                let message = message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
+                let message = Message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
 
                 match message {
                     Message::JoinAck(peer_id) => {
@@ -100,7 +96,7 @@ impl Peer {
         server_tx: Sender<ServerThreadMessage>,
     ) {
         loop {
-            let result = message::recv(&stream);
+            let result = Message::recv(&stream);
 
             // Handle peer connection loss
             if result.is_err() {
@@ -138,13 +134,13 @@ impl Peer {
             let receive = rx.recv_timeout(timeout);
 
             if receive.is_err() {
-                message::send(&stream, &Message::Heartbeat).unwrap();
+                Message::send(&stream, &Message::Heartbeat).unwrap();
                 continue;
             }
 
             match receive.unwrap() {
                 Relay(message) => {
-                    message::send(&stream, &message).unwrap_or_else(|e| console::log!("{e:?}"));
+                    Message::send(&stream, &message).unwrap_or_else(|e| console::log!("{e:?}"));
                 }
                 Terminate => break,
             }

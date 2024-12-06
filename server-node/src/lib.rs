@@ -12,6 +12,8 @@
 
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 
+use std::thread::{self, JoinHandle};
+
 pub mod config;
 pub mod console;
 pub mod dhcp;
@@ -19,3 +21,30 @@ pub mod message;
 pub mod peer;
 pub mod server;
 pub mod thread_pool;
+
+pub trait ThreadJoin: Sized {
+    fn join(self) -> thread::Result<()>;
+
+    fn thread(&self) -> &thread::Thread;
+
+    fn join_and_format_error(self) -> Result<(), String> {
+        let name = self.thread().name().unwrap_or("").to_string();
+        self.join().map_err(|e| -> String {
+            format!(
+                "Thread {} panicked, Err: {:?}",
+                name,
+                e.downcast_ref::<&str>()
+            )
+        })
+    }
+}
+
+impl ThreadJoin for JoinHandle<()> {
+    fn join(self) -> thread::Result<()> {
+        self.join()
+    }
+
+    fn thread(&self) -> &thread::Thread {
+        self.thread()
+    }
+}

@@ -97,7 +97,6 @@ macro_rules! debug {
     }};
 }
 
-#[allow(unused)]
 macro_rules! error {
     ($($arg:tt)*) => {{
             crate::console::log_str(&format!($($arg)*), "[31m");
@@ -116,5 +115,4 @@ macro_rules! warning {
     }};
 }
 
-#[allow(unused)]
 pub(crate) use {debug, error, log, warning};

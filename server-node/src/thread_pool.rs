@@ -1,4 +1,4 @@
-use crate::console;
+use crate::{console, ThreadJoin};
 use std::{
     sync::{mpsc, Arc, Mutex},
     thread,
@@ -57,7 +57,9 @@ impl Drop for ThreadPool {
             console::debug!("Shutting down worker {}", worker.id);
 
             if let Some(thread) = worker.thread.take() {
-                thread.join().unwrap();
+                if let Err(msg) = thread.join_and_format_error() {
+                    console::error!("{msg}");
+                }
             }
         }
     }
@@ -71,21 +73,24 @@ struct Worker {
 
 impl Worker {
     fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
-        let thread = thread::spawn(move || loop {
-            let message = receiver.lock().unwrap().recv();
+        let thread = thread::Builder::new()
+            .name(format!("{}::Worker({})", module_path!(), id))
+            .spawn(move || loop {
+                let message = receiver.lock().unwrap().recv();
 
-            match message {
-                Ok(job) => {
-                    console::debug!("Worker {id} got a job; executing.");
+                match message {
+                    Ok(job) => {
+                        console::debug!("Worker {id} got a job; executing.");
 
-                    job();
+                        job();
+                    }
+                    Err(_) => {
+                        console::debug!("Worker {id} disconnected; shutting down.");
+                        break;
+                    }
                 }
-                Err(_) => {
-                    console::debug!("Worker {id} disconnected; shutting down.");
-                    break;
-                }
-            }
-        });
+            })
+            .unwrap();
 
         Worker {
             id,

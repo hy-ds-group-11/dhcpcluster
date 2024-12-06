@@ -5,6 +5,7 @@ use crate::{
     message::Message,
     peer::{Peer, PeerId},
     thread_pool::ThreadPool,
+    ThreadJoin,
 };
 use protocol::{DhcpClientMessage, DhcpServerMessage, RecvCbor, SendCbor};
 use std::{
@@ -110,13 +111,18 @@ impl Server {
         client_listener: TcpListener,
     ) -> Result<(), Box<dyn Error>> {
         let peer_tx = self.tx.clone();
-        let peer_listener_thread =
-            thread::spawn(move || Self::listen_nodes(peer_listener, peer_tx));
+        let peer_listener_thread = thread::Builder::new()
+            .name(format!("{}::peer_listener_thread", module_path!()))
+            .spawn(move || Self::listen_nodes(peer_listener, peer_tx))
+            .unwrap();
 
         let client_tx = self.tx.clone();
-        let client_listener_thread = thread::spawn(move || {
-            Self::listen_clients(client_listener, client_tx, self.config.thread_count)
-        });
+        let client_listener_thread = thread::Builder::new()
+            .name(format!("{}::client_listener_thread", module_path!()))
+            .spawn(move || {
+                Self::listen_clients(client_listener, client_tx, self.config.thread_count)
+            })
+            .unwrap();
 
         // Only node in cluster, become coordinator
         if self.peers.is_empty() {
@@ -148,21 +154,14 @@ impl Server {
             console::render(self.start_time, &format!("{self}"));
         }
 
-        peer_listener_thread.join().map_err(|e| -> Box<dyn Error> {
-            format!(
-                "Node listener thread panicked, Err: {:?}",
-                e.downcast_ref::<&str>()
-            )
-            .into()
-        })?;
-
-        client_listener_thread.join().map_err(|e| {
-            format!(
-                "Client listener thread panicked, Err: {:?}",
-                e.downcast_ref::<&str>()
-            )
-            .into()
-        })
+        peer_listener_thread.join_and_format_error()?;
+        client_listener_thread.join_and_format_error()?;
+        for peer in self.peers {
+            if let Err(msg) = peer.join() {
+                console::error!("{msg}");
+            }
+        }
+        Ok(())
     }
 
     fn serve_client(stream: TcpStream, server_tx: Sender<ServerThreadMessage>) {
@@ -392,13 +391,16 @@ impl Server {
 
         let dur = self.config.heartbeat_timeout;
         let tx = self.tx.clone();
-        thread::spawn(move || {
-            // Wait for peers to vote.
-            console::log!("Starting election wait");
-            thread::sleep(dur);
-            console::log!("Election wait over");
-            tx.send(ServerThreadMessage::ElectionTimeout).unwrap();
-        }); // Drop JoinHandle, detaching election thread from server thread
+        thread::Builder::new()
+            .name(format!("{}::election_timer_thread", module_path!()))
+            .spawn(move || {
+                // Wait for peers to vote.
+                console::log!("Starting election wait");
+                thread::sleep(dur);
+                console::log!("Election wait over");
+                tx.send(ServerThreadMessage::ElectionTimeout).unwrap();
+            })
+            .unwrap(); // Drop JoinHandle, detaching election thread from server thread
     }
 
     /// Inspect current server role. Become leader and send [`Message::Coordinator`] to all peers

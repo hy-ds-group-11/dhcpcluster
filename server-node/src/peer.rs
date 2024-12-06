@@ -1,4 +1,4 @@
-use crate::{config::Config, console, message::Message, server::ServerThreadMessage};
+use crate::{config::Config, console, message::Message, server::ServerThreadMessage, ThreadJoin};
 use protocol::{RecvCbor, SendCbor};
 use std::{
     error::Error,
@@ -21,9 +21,7 @@ pub type PeerId = u32;
 pub struct Peer {
     pub id: PeerId,
     tx: Sender<SenderThreadMessage>,
-    #[expect(dead_code, reason = "Unimplemented thread join handling")]
     read_thread: JoinHandle<()>,
-    #[expect(dead_code, reason = "Unimplemented thread join handling")]
     write_thread: JoinHandle<()>,
 }
 
@@ -47,12 +45,14 @@ impl Peer {
         Self {
             id,
             tx: tx.clone(),
-            read_thread: thread::spawn(move || {
-                Self::read_thread_fn(stream_read, id, tx, server_tx)
-            }),
-            write_thread: thread::spawn(move || {
-                Self::write_thread_fn(stream_write, rx, heartbeat_timeout)
-            }),
+            read_thread: thread::Builder::new()
+                .name(format!("{}::read_thread({})", module_path!(), id))
+                .spawn(move || Self::read_thread_fn(stream_read, id, tx, server_tx))
+                .unwrap(),
+            write_thread: thread::Builder::new()
+                .name(format!("{}::write_thread({})", module_path!(), id))
+                .spawn(move || Self::write_thread_fn(stream_write, rx, heartbeat_timeout))
+                .unwrap(),
         }
     }
 
@@ -87,6 +87,14 @@ impl Peer {
         self.tx
             .send(SenderThreadMessage::Relay(message))
             .unwrap_or_else(|e| console::warning!("{e:?}"));
+    }
+
+    pub fn join(self) -> Result<(), String> {
+        // TODO implement ^C events? Dropping the channel tx should be enough
+        // to stop the threads, as seen in thread_pool
+        self.read_thread.join_and_format_error()?;
+        self.write_thread.join_and_format_error()?;
+        Ok(())
     }
 
     fn read_thread_fn(

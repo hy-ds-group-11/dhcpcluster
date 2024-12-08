@@ -1,18 +1,10 @@
-use std::{
-    error::Error,
-    ffi::OsStr,
-    net::{SocketAddr, ToSocketAddrs},
-    path::Path,
-};
+use std::{error::Error, ffi::OsStr, path::Path};
 
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct Config {
-    #[serde(skip_deserializing)]
-    pub servers: Vec<SocketAddr>,
-    #[serde(rename = "servers")]
-    pub names: Vec<String>,
+    pub servers: Vec<String>,
 }
 
 impl Config {
@@ -21,12 +13,7 @@ impl Config {
             return Err("Config file path should end in .toml".into());
         }
         let toml = std::fs::read_to_string(path)?;
-        let mut conf: Config = toml::from_str(&toml)?;
-        conf.servers = conf
-            .names
-            .iter()
-            .map(|name| name.to_socket_addrs().unwrap().next().unwrap())
-            .collect();
+        let conf: Config = toml::from_str(&toml)?;
         Ok(conf)
     }
 }

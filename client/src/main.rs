@@ -1,9 +1,9 @@
 use client::config::Config;
 use protocol::DhcpServerMessage;
 use rand::Rng;
+use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     error::Error,
-    io::{self, BufRead},
     net::SocketAddr,
     time::{Duration, Instant},
 };
@@ -144,18 +144,34 @@ fn main() -> Result<(), Box<dyn Error>> {
     list(&config);
     help();
 
-    let stdin = io::stdin().lock();
-    let lines = stdin.lines();
-    for line in lines {
-        use Command::*;
-        match parse_command(&line.unwrap()) {
-            Ok(Quit) => break,
-            Ok(Query(count, server)) => {
-                handle_query_command(count, server, &config).unwrap_or_else(|e| println!("{e:?}"))
+    let mut rl = DefaultEditor::new()?;
+    loop {
+        let readline = rl.readline("> ");
+        match readline {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str())?;
+                use Command::*;
+                match parse_command(&line) {
+                    Ok(Quit) => break,
+                    Ok(Query(count, server)) => handle_query_command(count, server, &config)
+                        .unwrap_or_else(|e| println!("{e:?}")),
+                    Ok(List) => list(&config),
+                    Ok(Help) => help(),
+                    Err(e) => println!("{e:?}"),
+                }
             }
-            Ok(List) => list(&config),
-            Ok(Help) => help(),
-            Err(e) => println!("{e:?}"),
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("^D");
+                break;
+            }
+            Err(err) => {
+                println!("Error: {:?}", err);
+                break;
+            }
         }
     }
 

@@ -14,6 +14,8 @@ pub fn get_offer(
     DhcpClientMessage::send(&stream, &DhcpClientMessage::Discover { mac_address })?;
     let response = DhcpServerMessage::recv(&stream)?;
     match response {
+        // TODO: In my opinion, offer internals (in the protocol crate) should be refactored
+        // into a struct so we could be returning just Offers, not DhcpServerMessages.
         offer @ DhcpServerMessage::Offer { .. } => Ok(Some(offer)),
         DhcpServerMessage::Ack => Err("Unexpected Ack from server".into()),
         DhcpServerMessage::Nack => Ok(None),

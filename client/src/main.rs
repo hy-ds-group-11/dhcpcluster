@@ -39,7 +39,7 @@ fn parse_command(line: &str) -> Result<Command, Box<dyn Error>> {
     let command: Vec<&str> = line.split_ascii_whitespace().collect();
     Ok(match command.as_slice() {
         ["exit" | "quit" | "q"] => Command::Quit,
-        ["query", count, rest @ ..] => Command::Query(
+        ["query" | "qr", count, rest @ ..] => Command::Query(
             count.parse()?,
             match rest {
                 [] | ["random"] => Server::Random,
@@ -47,8 +47,8 @@ fn parse_command(line: &str) -> Result<Command, Box<dyn Error>> {
                 _ => return Err("Invalid query command".into()),
             },
         ),
-        ["list"] => Command::List,
-        ["help"] => Command::Help,
+        ["list" | "ls"] => Command::List,
+        ["help" | "h"] => Command::Help,
         _ => return Err("Unsupported command".into()),
     })
 }
@@ -134,12 +134,9 @@ fn handle_query_command(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut config = Config::load_toml_file("config.toml")?;
-    let args: Vec<SocketAddr> = std::env::args()
-        .skip(1)
-        .map(|s| s.parse().unwrap())
-        .collect();
-    config.servers.extend(args);
+    let config = Config::load_toml_file("config.toml")?;
+    // TODO: Change Config to be a AoS (Array of Structures) instead for current
+    // SoA, and then add server definitions from CLI arguments as well
 
     list(&config);
     help();

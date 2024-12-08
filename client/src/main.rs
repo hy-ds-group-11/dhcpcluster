@@ -20,6 +20,19 @@ enum Command {
     Quit,
     Query(QueryCount, Server),
     List,
+    Help,
+}
+
+fn help() {
+    println!(
+        r#"---- DHCP Client ----
+Supported commands:
+    quit
+    query N [random|<index>]
+    list
+    help
+"#
+    );
 }
 
 fn parse_command(line: &str) -> Result<Command, Box<dyn Error>> {
@@ -35,6 +48,7 @@ fn parse_command(line: &str) -> Result<Command, Box<dyn Error>> {
             },
         ),
         ["list"] => Command::List,
+        ["help"] => Command::Help,
         _ => return Err("Unsupported command".into()),
     })
 }
@@ -128,14 +142,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     config.servers.extend(args);
 
     list(&config);
-    println!(
-        r#"---- DHCP Client ----
-Supported commands:
-    quit
-    query N [random|<index>]
-    list
-"#
-    );
+    help();
 
     let stdin = io::stdin().lock();
     let lines = stdin.lines();
@@ -147,6 +154,7 @@ Supported commands:
                 handle_query_command(count, server, &config).unwrap_or_else(|e| println!("{e:?}"))
             }
             Ok(List) => list(&config),
+            Ok(Help) => help(),
             Err(e) => println!("{e:?}"),
         }
     }

@@ -4,5 +4,6 @@ peers = []
 heartbeat_timeout = 2000
 net = "10.0.0.0"
 prefix_length = 24
+lease_time = 3600
 dhcp_address = "127.0.1.1:4321"
 thread_count = 4

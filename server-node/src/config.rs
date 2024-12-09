@@ -25,6 +25,7 @@ struct ConfigFile {
     heartbeat_timeout: u64,
     net: Ipv4Addr,
     prefix_length: u32,
+    lease_time: u64,
     dhcp_address: SocketAddr,
     thread_count: usize,
 }
@@ -64,6 +65,7 @@ impl From<ConfigFile> for Config {
             heartbeat_timeout,
             net,
             prefix_length,
+            lease_time,
             dhcp_address,
             thread_count,
         }: ConfigFile,
@@ -74,7 +76,7 @@ impl From<ConfigFile> for Config {
             id,
             heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
             prefix_length,
-            dhcp_pool: DhcpService::from_cidr(net, prefix_length),
+            dhcp_pool: DhcpService::from_cidr(net, prefix_length, Duration::from_secs(lease_time)),
             dhcp_address,
             thread_count,
         }

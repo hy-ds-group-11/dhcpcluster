@@ -19,30 +19,33 @@ pub struct Lease {
 pub struct DhcpService {
     pub start: u32,
     pub end: u32,
+    pub lease_time: Duration,
     pub leases: Vec<Lease>,
     pub pending_leases: Vec<Lease>,
 }
 
 impl DhcpService {
-    pub fn new_with_leases(start: u32, end: u32, leases: &[Lease]) -> Self {
+    pub fn new_with_leases(start: u32, end: u32, lease_time: Duration, leases: &[Lease]) -> Self {
         Self {
             start,
             end,
+            lease_time,
             leases: leases.into(),
             pending_leases: Vec::new(),
         }
     }
 
-    pub fn new(start: u32, end: u32) -> Self {
-        Self::new_with_leases(start, end, &[])
+    pub fn new(start: u32, end: u32, lease_time: Duration) -> Self {
+        Self::new_with_leases(start, end, lease_time, &[])
     }
 
-    pub fn from_cidr(ip_address: Ipv4Addr, prefix_length: u32) -> Self {
+    pub fn from_cidr(ip_address: Ipv4Addr, prefix_length: u32, lease_time: Duration) -> Self {
         let start = ip_address.to_bits();
         let end = start + 2_u32.pow(32 - prefix_length) - 1;
         Self {
             start,
             end,
+            lease_time,
             leases: Vec::new(),
             pending_leases: Vec::new(),
         }
@@ -57,6 +60,7 @@ impl DhcpService {
             pools.push(DhcpService::new_with_leases(
                 self.start + i * pool_size,
                 self.start + (i + 1) * pool_size,
+                self.lease_time,
                 leases,
             ))
         }
@@ -64,20 +68,19 @@ impl DhcpService {
         pools
     }
 
-    fn fresh_timestamp() -> SystemTime {
-        SystemTime::now()
-            .checked_add(Duration::from_secs(60 * 60))
-            .unwrap()
+    fn fresh_timestamp(&self) -> SystemTime {
+        SystemTime::now().checked_add(self.lease_time).unwrap()
     }
 
-    pub fn add_lease(&mut self, lease: Lease) {
+    pub fn add_lease(&mut self, new_lease: Lease) {
         // TODO: do some sanity checks
         if let Some(lease) = self.leases.iter_mut().find(|l| {
-            l.hardware_address == lease.hardware_address && l.lease_address == lease.lease_address
+            l.hardware_address == new_lease.hardware_address
+                && l.lease_address == new_lease.lease_address
         }) {
-            lease.expiry_timestamp = lease.expiry_timestamp;
+            lease.expiry_timestamp = new_lease.expiry_timestamp;
         } else {
-            self.leases.push(lease);
+            self.leases.push(new_lease);
         }
     }
 
@@ -110,7 +113,7 @@ impl DhcpService {
             let lease = Lease {
                 hardware_address: mac_address,
                 lease_address: Ipv4Addr::from_bits(ip_addr),
-                expiry_timestamp: Self::fresh_timestamp(),
+                expiry_timestamp: self.fresh_timestamp(),
             };
             self.pending_leases.push(lease.clone());
             return Some(lease);
@@ -124,13 +127,14 @@ impl DhcpService {
         mac_address: [u8; 6],
         ip_address: Ipv4Addr,
     ) -> Result<Lease, Box<dyn Error>> {
+        let fresh_timestamp = self.fresh_timestamp();
         if let Some(pending_index) = self
             .pending_leases
             .iter()
             .position(|l| l.hardware_address == mac_address && l.lease_address == ip_address)
         {
             let mut lease = self.pending_leases.remove(pending_index);
-            lease.expiry_timestamp = Self::fresh_timestamp();
+            lease.expiry_timestamp = fresh_timestamp;
             self.leases.push(lease.clone());
             return Ok(lease);
         } else if let Some(lease) = self
@@ -138,7 +142,7 @@ impl DhcpService {
             .iter_mut()
             .find(|l| l.hardware_address == mac_address && l.lease_address == ip_address)
         {
-            lease.expiry_timestamp = Self::fresh_timestamp();
+            lease.expiry_timestamp = fresh_timestamp;
             return Ok(lease.clone());
         }
         Err("Can't find matching lease".into())
@@ -176,7 +180,7 @@ impl Display for DhcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let range = self.fmt_range();
         writeln!(f, "{range}")?;
-        if self.leases.len() > 0 {
+        if !self.leases.is_empty() {
             writeln!(f)?;
         }
         for lease in self.leases.iter().take(3) {

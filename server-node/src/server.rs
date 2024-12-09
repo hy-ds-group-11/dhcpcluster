@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     console,
-    dhcp::{DhcpPool, Lease},
+    dhcp::{DhcpService, Lease},
     message::Message,
     peer::{Peer, PeerId},
     thread_pool::ThreadPool,
@@ -14,7 +14,7 @@ use std::{
     net::{Ipv4Addr, TcpListener, TcpStream},
     sync::mpsc::{channel, Receiver, Sender},
     thread,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 #[derive(Debug)]
@@ -52,9 +52,7 @@ pub struct Server {
     rx: Option<Receiver<ServerThreadMessage>>,
     tx: Sender<ServerThreadMessage>,
     coordinator_id: Option<PeerId>,
-    #[expect(dead_code, reason = "Unimplemented")]
-    leases: Vec<Lease>,
-    dhcp_pool: DhcpPool,
+    dhcp_pool: DhcpService,
     peers: Vec<Peer>,
     local_role: ServerRole,
     majority: bool,
@@ -67,7 +65,6 @@ impl Server {
     pub fn connect(config: Config) -> Self {
         let start_time = SystemTime::now();
         let coordinator_id = None;
-        let leases = Vec::new();
         let dhcp_pool = config.dhcp_pool.clone();
         let mut peers = Vec::new();
         let local_role = ServerRole::Follower;
@@ -92,7 +89,6 @@ impl Server {
             rx: Some(rx),
             tx,
             coordinator_id,
-            leases,
             dhcp_pool,
             peers,
             local_role,
@@ -143,13 +139,12 @@ impl Server {
                 ProtocolMessage { sender_id, message } => {
                     self.handle_protocol_message(sender_id, message)
                 }
-                // TODO: Implement lease handling here
-                OfferLease { mac_address, tx } => {}
+                OfferLease { mac_address, tx } => self.handle_offer_lease(mac_address, tx),
                 ConfirmLease {
                     mac_address,
                     tx,
                     ip,
-                } => {}
+                } => self.handle_confirm_lease(mac_address, tx, ip),
             }
             console::render(self.start_time, &format!("{self}"));
         }
@@ -202,7 +197,7 @@ impl Server {
             }),
         )
         .unwrap();
-        let result = DhcpClientMessage::recv(&stream);
+        let result = DhcpClientMessage::recv_timeout(&stream, Duration::from_secs(10));
         let (tx, rx) = channel::<bool>();
         match result {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
@@ -216,7 +211,7 @@ impl Server {
             }
             _ => console::warning!("Client didn't follow protocol!"),
         }
-        if rx.recv().unwrap() {
+        if rx.recv_timeout(Duration::from_secs(10)).unwrap() {
             DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack).unwrap()
         } else {
             DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap()
@@ -260,7 +255,7 @@ impl Server {
         };
     }
 
-    fn handle_set_pool(&mut self, dhcp_pool: DhcpPool) {
+    fn handle_set_pool(&mut self, dhcp_pool: DhcpService) {
         console::log!("Set pool to {dhcp_pool}");
         self.dhcp_pool = dhcp_pool;
     }
@@ -299,6 +294,21 @@ impl Server {
             console::log!("{} majority", if majority { "Reached" } else { "Lost" });
             self.majority = majority;
         }
+    }
+
+    #[expect(unused)]
+    fn handle_offer_lease(&mut self, mac_address: [u8; 6], tx: Sender<(Lease, u32)>) {
+        todo!()
+    }
+
+    #[expect(unused)]
+    fn handle_confirm_lease(
+        &mut self,
+        mac_address: [u8; 6],
+        server_tx: Sender<bool>,
+        ip: Ipv4Addr,
+    ) {
+        todo!()
     }
 
     fn listen_nodes(listener: TcpListener, server_tx: Sender<ServerThreadMessage>) {

@@ -7,7 +7,7 @@
 //! Jump to [`Message`] for the server-to-server message definition.
 
 use crate::{
-    dhcp::{DhcpPool, Lease},
+    dhcp::{DhcpService, Lease},
     peer::PeerId,
 };
 use protocol::{RecvCbor, SendCbor};
@@ -24,7 +24,7 @@ pub enum Message {
     Coordinator,
     Add(Lease),
     Update(Lease),
-    SetPool(DhcpPool),
+    SetPool(DhcpService),
     SetMajority(bool),
 }
 

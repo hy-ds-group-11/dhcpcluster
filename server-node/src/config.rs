@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{dhcp::DhcpPool, peer::PeerId};
+use crate::{dhcp::DhcpService, peer::PeerId};
 
 #[derive(Deserialize, Debug)]
 struct ConfigFile {
@@ -46,7 +46,7 @@ pub struct Config {
     pub peers: Vec<SocketAddr>,
     pub id: PeerId,
     pub heartbeat_timeout: Duration,
-    pub dhcp_pool: DhcpPool,
+    pub dhcp_pool: DhcpService,
     pub dhcp_address: SocketAddr,
     pub thread_count: usize,
 }
@@ -72,7 +72,7 @@ impl From<ConfigFile> for Config {
             peers,
             id,
             heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
-            dhcp_pool: DhcpPool::from_cidr(net, prefix_length),
+            dhcp_pool: DhcpService::from_cidr(net, prefix_length),
             dhcp_address,
             thread_count,
         }

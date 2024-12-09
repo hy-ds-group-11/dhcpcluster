@@ -26,4 +26,4 @@ The software is currently _prototype quality_, it's not intended for production 
 | [47](doc/week47.md) | Server handshakes :raised_hands:, testing :white_check_mark: and groundwork       |
 | [48](doc/week48.md) | Peer heartbeat messages :revolving_hearts:, thread shutdown :arrow_heading_down:  |
 | [49](doc/week49.md) | Leader election :trophy:, address pool distribution :1234:, client CLI :computer: |
-| [50](doc/week50.md) | Under construction :construction:                                                 |
+| [50](doc/week50.md) | DHCP functionality and client-server communication :sparkles:                     |

@@ -21,9 +21,9 @@ The software is currently _prototype quality_, it's not intended for production 
 
 | Week                | Summary                                                                           |
 | :------------------ | :-------------------------------------------------------------------------------- |
-| [45](doc/week45.md) | Initial planning and specification :busts_in_silhouette::speech_balloon:          |
-| [46](doc/week46.md) | Design, documentation :closed_book: and server code :rocket:                      |
-| [47](doc/week47.md) | Server handshakes :raised_hands:, testing :white_check_mark: and groundwork       |
-| [48](doc/week48.md) | Peer heartbeat messages :revolving_hearts:, thread shutdown :arrow_heading_down:  |
-| [49](doc/week49.md) | Leader election :trophy:, address pool distribution :1234:, client CLI :computer: |
-| [50](doc/week50.md) | DHCP functionality and client-server communication :sparkles:                     |
+| [45](doc/week45.md) | :busts_in_silhouette::speech_balloon: Initial planning and specification          |
+| [46](doc/week46.md) | :closed_book: Design, documentation and server code                               |
+| [47](doc/week47.md) | :white_check_mark: Server handshakes, testing and groundwork                      |
+| [48](doc/week48.md) | :revolving_hearts: Peer heartbeat messages, thread shutdown                       |
+| [49](doc/week49.md) | :1234::computer: Leader election, address pool distribution, client CLI           |
+| [50](doc/week50.md) | :sparkles: DHCP functionality and client-server communication                     |

@@ -4,9 +4,10 @@ A University of Helsinki **Distributed Systems** Course Project
 
 Fall 2024, Group 11
 
-This repository contains a distributed DHCP server with shared state and a DHCP Relay Agent implementation, which acts as a load balancer.
+This repository contains a distributed DHCP server with shared state and a CLI for testing the server.
+A DHCP Relay Agent, acting as a load balancer, has been designed but not implemented.
 
-The software is currently _unimplemented_, but development work has started.
+The software is currently _prototype quality_, it's not intended for production use.
 
 ## Documentation
 

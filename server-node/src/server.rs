@@ -7,7 +7,7 @@ use crate::{
     thread_pool::ThreadPool,
     ThreadJoin,
 };
-use protocol::{DhcpClientMessage, DhcpServerMessage, RecvCbor, SendCbor};
+use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, RecvCbor, SendCbor};
 use std::{
     error::Error,
     fmt::Display,
@@ -195,11 +195,11 @@ impl Server {
             .as_secs() as u32;
         DhcpServerMessage::send(
             &stream,
-            &DhcpServerMessage::Offer {
+            &DhcpServerMessage::Offer(DhcpOffer {
                 ip,
                 lease_time,
                 subnet_mask,
-            },
+            }),
         )
         .unwrap();
         let result = DhcpClientMessage::recv(&stream);

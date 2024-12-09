@@ -1,5 +1,5 @@
 use client::config::Config;
-use protocol::DhcpServerMessage;
+use protocol::DhcpOffer;
 use rand::Rng;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
@@ -30,8 +30,7 @@ Supported commands:
     quit
     query N [random|<index>]
     list
-    help
-"#
+    help"#
     );
 }
 
@@ -70,7 +69,7 @@ fn random_mac_addr() -> [u8; 6] {
     rng.gen()
 }
 
-fn query(server: impl ToSocketAddrs) -> Result<(DhcpServerMessage, Duration), Box<dyn Error>> {
+fn query(server: impl ToSocketAddrs) -> Result<(DhcpOffer, Duration), Box<dyn Error>> {
     let start = Instant::now();
 
     // Resolve server name
@@ -84,14 +83,14 @@ fn query(server: impl ToSocketAddrs) -> Result<(DhcpServerMessage, Duration), Bo
                 Some(_) => continue, // Try next DNS result
                 None => return Err(e),
             },
-            Ok(Some(offer @ DhcpServerMessage::Offer { ip, .. })) => {
-                match client::get_ack(addr, mac_addr, ip)? {
-                    Some(_) => return Ok((offer, start.elapsed())),
-                    None => return Err("Server replied to Request with Nack".into()),
+            Ok(Some(offer @ DhcpOffer { ip, .. })) => {
+                if client::get_ack(addr, mac_addr, ip)? {
+                    return Ok((offer, start.elapsed()));
+                } else {
+                    return Err("Server replied to Request with Nack".into());
                 }
             }
             Ok(None) => return Err("Server replied to Discover with Nack".into()),
-            Ok(Some(_)) => unreachable!(), // Unreachable, because get_offer returns only the Offer variant. TODO: Fix this at type level
         }
     }
     Err("Can't reach server".into())
@@ -162,7 +161,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rl = DefaultEditor::new()?;
     loop {
-        let readline = rl.readline("> ");
+        let readline = rl.readline("\n> ");
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;

@@ -15,12 +15,15 @@ pub enum DhcpClientMessage {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+pub struct DhcpOffer {
+    pub ip: Ipv4Addr,
+    pub lease_time: u32,
+    pub subnet_mask: u32,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
 pub enum DhcpServerMessage {
-    Offer {
-        ip: Ipv4Addr,
-        lease_time: u32,
-        subnet_mask: u32,
-    },
+    Offer(DhcpOffer),
     Ack,
     Nack,
 }

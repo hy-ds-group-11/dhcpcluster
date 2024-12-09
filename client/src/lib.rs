@@ -1,6 +1,6 @@
 pub mod config;
 
-use protocol::{DhcpClientMessage, DhcpServerMessage, RecvCbor, SendCbor};
+use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, RecvCbor, SendCbor};
 use std::{
     error::Error,
     net::{Ipv4Addr, SocketAddr, TcpStream},
@@ -9,14 +9,12 @@ use std::{
 pub fn get_offer(
     server_addr: SocketAddr,
     mac_address: [u8; 6],
-) -> Result<Option<DhcpServerMessage>, Box<dyn Error>> {
+) -> Result<Option<DhcpOffer>, Box<dyn Error>> {
     let stream = TcpStream::connect(server_addr)?;
     DhcpClientMessage::send(&stream, &DhcpClientMessage::Discover { mac_address })?;
     let response = DhcpServerMessage::recv(&stream)?;
     match response {
-        // TODO: In my opinion, offer internals (in the protocol crate) should be refactored
-        // into a struct so we could be returning just Offers, not DhcpServerMessages.
-        offer @ DhcpServerMessage::Offer { .. } => Ok(Some(offer)),
+        DhcpServerMessage::Offer(offer) => Ok(Some(offer)),
         DhcpServerMessage::Ack => Err("Unexpected Ack from server".into()),
         DhcpServerMessage::Nack => Ok(None),
     }
@@ -26,13 +24,13 @@ pub fn get_ack(
     server_addr: SocketAddr,
     mac_address: [u8; 6],
     ip: Ipv4Addr,
-) -> Result<Option<DhcpServerMessage>, Box<dyn Error>> {
+) -> Result<bool, Box<dyn Error>> {
     let stream = TcpStream::connect(server_addr)?;
     DhcpClientMessage::send(&stream, &DhcpClientMessage::Request { mac_address, ip })?;
     let response = DhcpServerMessage::recv(&stream)?;
     match response {
-        DhcpServerMessage::Offer { .. } => Err("Unexpected Offer from server".into()),
-        ack @ DhcpServerMessage::Ack => Ok(Some(ack)),
-        DhcpServerMessage::Nack => Ok(None),
+        DhcpServerMessage::Offer(_) => Err("Unexpected Offer from server".into()),
+        DhcpServerMessage::Ack => Ok(true),
+        DhcpServerMessage::Nack => Ok(false),
     }
 }

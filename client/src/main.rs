@@ -4,7 +4,7 @@ use rand::Rng;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     error::Error,
-    net::ToSocketAddrs,
+    net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     process::exit,
     time::{Duration, Instant},
@@ -93,13 +93,14 @@ fn query(server: &str, default_port: u16) -> Result<(DhcpOffer, Duration), Box<d
     let mac_addr = random_mac_addr();
 
     while let Some(addr) = addrs.next() {
-        match client::get_offer(addr, mac_addr) {
+        let stream = TcpStream::connect(addr)?;
+        match client::get_offer(&stream, mac_addr) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
                 None => return Err(e),
             },
             Ok(Some(offer @ DhcpOffer { ip, .. })) => {
-                if client::get_ack(addr, mac_addr, ip)? {
+                if client::get_ack(&stream, mac_addr, ip)? {
                     return Ok((offer, start.elapsed()));
                 } else {
                     return Err("Server replied to Request with Nack".into());
@@ -148,21 +149,22 @@ fn handle_query_command(
                 results.iter().filter(|res| res.is_ok()).count(),
                 count
             );
-            println!(
-                "Min query time: {:?}",
-                results
-                    .iter()
-                    .filter_map(|res| res.as_ref().ok().map(|(_, dur)| dur))
-                    .min()
-            );
             // TODO: avg
-            println!(
-                "Max query time: {:?}",
-                results
-                    .iter()
-                    .filter_map(|res| res.as_ref().ok().map(|(_, dur)| dur))
-                    .max()
-            );
+
+            if let Some(min_time) = results
+                .iter()
+                .filter_map(|res| res.as_ref().ok().map(|(_, dur)| dur))
+                .min()
+            {
+                println!("Min query time: {:.3?}", min_time);
+            }
+            if let Some(max_time) = results
+                .iter()
+                .filter_map(|res| res.as_ref().ok().map(|(_, dur)| dur))
+                .max()
+            {
+                println!("Max query time: {:.3?}", max_time);
+            }
         }
     }
 

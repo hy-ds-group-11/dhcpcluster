@@ -142,9 +142,9 @@ impl Server {
                 OfferLease { mac_address, tx } => self.handle_offer_lease(mac_address, tx),
                 ConfirmLease {
                     mac_address,
-                    tx,
                     ip,
-                } => self.handle_confirm_lease(mac_address, tx, ip),
+                    tx,
+                } => self.handle_confirm_lease(mac_address, ip, tx),
             }
             console::render(self.start_time, &format!("{self}"));
         }
@@ -168,7 +168,7 @@ impl Server {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 Self::handle_renew(stream, server_tx, mac_address, ip)
             }
-            Err(e) => console::warning!("Client didn't follow protocol: {e}"),
+            Err(e) => console::warning!("Client didn't follow protocol\n{e}"),
         }
     }
 
@@ -181,7 +181,16 @@ impl Server {
         server_tx
             .send(ServerThreadMessage::OfferLease { mac_address, tx })
             .unwrap();
-        let (offer, subnet_mask) = rx.recv().unwrap();
+
+        // Wait for processing DHCP discover
+        let (offer, subnet_mask) = match rx.recv() {
+            Ok(data) => data,
+            Err(_) => {
+                DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap();
+                return;
+            }
+        };
+
         let ip = offer.lease_address;
         let lease_time = offer
             .expiry_timestamp
@@ -209,9 +218,12 @@ impl Server {
                     })
                     .unwrap();
             }
-            _ => console::warning!("Client didn't follow protocol!"),
+            Err(e) => console::warning!("Client didn't follow protocol!\n{e}"),
+            Ok(message) => console::warning!("Client didn't follow protocol!\n{message:?}"),
         }
-        if rx.recv_timeout(Duration::from_secs(10)).unwrap() {
+
+        // Wait for processing DHCP commit
+        if rx.recv_timeout(Duration::from_secs(10)).unwrap_or(false) {
             DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack).unwrap()
         } else {
             DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap()
@@ -296,19 +308,22 @@ impl Server {
         }
     }
 
-    #[expect(unused)]
     fn handle_offer_lease(&mut self, mac_address: [u8; 6], tx: Sender<(Lease, u32)>) {
-        todo!()
+        let lease = match self.dhcp_pool.discover_lease(mac_address) {
+            Some(lease) => lease,
+            None => return,
+        };
+        tx.send((lease, self.config.prefix_length)).unwrap();
     }
 
-    #[expect(unused)]
-    fn handle_confirm_lease(
-        &mut self,
-        mac_address: [u8; 6],
-        server_tx: Sender<bool>,
-        ip: Ipv4Addr,
-    ) {
-        todo!()
+    fn handle_confirm_lease(&mut self, mac_address: [u8; 6], ip: Ipv4Addr, tx: Sender<bool>) {
+        match self.dhcp_pool.commit_lease(mac_address, ip) {
+            Ok(_) => tx.send(true).unwrap(),
+            Err(e) => {
+                console::warning!("Failed to give ip {ip} to {mac_address:?}\n{e}");
+                tx.send(false).unwrap();
+            }
+        };
     }
 
     fn listen_nodes(listener: TcpListener, server_tx: Sender<ServerThreadMessage>) {

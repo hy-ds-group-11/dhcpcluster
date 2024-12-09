@@ -98,8 +98,7 @@ impl DhcpService {
         None
     }
 
-    #[expect(dead_code)]
-    fn commit_lease(
+    pub fn commit_lease(
         &mut self,
         mac_address: [u8; 6],
         ip_address: Ipv4Addr,
@@ -132,13 +131,13 @@ impl Display for Lease {
             "MAC {} has IP {}",
             self.hardware_address
                 .iter()
-                .map(|d| format!("{d:X}"))
+                .map(|d| format!("{d:0>2X}"))
                 .collect::<Vec<_>>()
                 .join(":"),
             self.lease_address,
         )?;
         if let Ok(dur) = self.expiry_timestamp.duration_since(SystemTime::now()) {
-            write!(f, ", expiring in {:<9.3?}", dur)?;
+            write!(f, ", expiring in {:<9.0?}", dur)?;
         }
         Ok(())
     }
@@ -146,14 +145,21 @@ impl Display for Lease {
 
 impl Display for DhcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
             "{} - {}",
             Ipv4Addr::from_bits(self.start),
             Ipv4Addr::from_bits(self.end)
         )?;
-        for lease in &self.leases {
+        if self.leases.len() > 0 {
+            writeln!(f)?;
+        }
+        for lease in self.leases.iter().take(3) {
             writeln!(f, "{lease}")?;
+        }
+        if self.leases.len() > 3 {
+            let remaining = self.leases.len() - 3;
+            writeln!(f, "And {remaining} more")?;
         }
         Ok(())
     }

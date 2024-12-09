@@ -24,13 +24,17 @@ pub struct DhcpService {
 }
 
 impl DhcpService {
-    pub fn new(start: u32, end: u32) -> Self {
+    pub fn new_with_leases(start: u32, end: u32, leases: &[Lease]) -> Self {
         Self {
             start,
             end,
-            leases: Vec::new(),
+            leases: leases.into(),
             pending_leases: Vec::new(),
         }
+    }
+
+    pub fn new(start: u32, end: u32) -> Self {
+        Self::new_with_leases(start, end, &[])
     }
 
     pub fn from_cidr(ip_address: Ipv4Addr, prefix_length: u32) -> Self {
@@ -44,15 +48,16 @@ impl DhcpService {
         }
     }
 
-    pub fn divide(&self, parts: u32) -> Vec<DhcpService> {
+    pub fn divide(&self, parts: u32, leases: &[Lease]) -> Vec<DhcpService> {
         let diff = self.end - self.start;
         let pool_size = diff / parts;
         let mut pools = Vec::new();
 
         for i in 0..parts {
-            pools.push(DhcpService::new(
+            pools.push(DhcpService::new_with_leases(
                 self.start + i * pool_size,
                 self.start + (i + 1) * pool_size,
+                leases,
             ))
         }
         pools[parts as usize - 1].end += diff % parts;
@@ -138,6 +143,14 @@ impl DhcpService {
         }
         Err("Can't find matching lease".into())
     }
+
+    pub fn fmt_range(&self) -> String {
+        format!(
+            "{} - {}",
+            Ipv4Addr::from_bits(self.start),
+            Ipv4Addr::from_bits(self.end)
+        )
+    }
 }
 
 impl Display for Lease {
@@ -161,12 +174,8 @@ impl Display for Lease {
 
 impl Display for DhcpService {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "{} - {}",
-            Ipv4Addr::from_bits(self.start),
-            Ipv4Addr::from_bits(self.end)
-        )?;
+        let range = self.fmt_range();
+        writeln!(f, "{range}")?;
         if self.leases.len() > 0 {
             writeln!(f)?;
         }

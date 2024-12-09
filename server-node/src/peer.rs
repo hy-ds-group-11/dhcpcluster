@@ -1,4 +1,6 @@
-use crate::{config::Config, console, message::Message, server::ServerThreadMessage, ThreadJoin};
+use crate::{
+    config::Config, console, dhcp::Lease, message::Message, server::ServerThreadMessage, ThreadJoin,
+};
 use protocol::{RecvCbor, SendCbor};
 use std::{
     error::Error,
@@ -60,20 +62,18 @@ impl Peer {
         stream: TcpStream,
         config: &Config,
         server_tx: Sender<ServerThreadMessage>,
-    ) -> Result<Peer, Box<dyn Error>> {
+    ) -> Result<(Peer, Vec<Lease>), Box<dyn Error>> {
         let result = Message::send(&stream, &Message::Join(config.id));
         match result {
             Ok(_) => {
                 let message = Message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
 
                 match message {
-                    Message::JoinAck(peer_id) => {
+                    Message::JoinAck(peer_id, leases) => {
                         console::log!("Connected to peer {peer_id}");
-                        Ok(Peer::new(
-                            stream,
-                            peer_id,
-                            server_tx,
-                            config.heartbeat_timeout,
+                        Ok((
+                            Peer::new(stream, peer_id, server_tx, config.heartbeat_timeout),
+                            leases,
                         ))
                     }
                     _ => panic!("Peer responded to Join with something other than JoinAck"),
@@ -121,7 +121,7 @@ impl Peer {
             let message = result.unwrap();
             use Message::*;
             match message {
-                Join(_) | JoinAck(_) => {
+                Join(_) | JoinAck(..) => {
                     panic!("Peer {peer_id} tried to send {message:?} after handshake")
                 }
                 _ => server_tx

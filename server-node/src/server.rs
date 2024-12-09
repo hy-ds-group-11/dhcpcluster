@@ -65,7 +65,7 @@ impl Server {
     pub fn connect(config: Config) -> Self {
         let start_time = SystemTime::now();
         let coordinator_id = None;
-        let dhcp_pool = config.dhcp_pool.clone();
+        let mut dhcp_pool = config.dhcp_pool.clone();
         let mut peers = Vec::new();
         let local_role = ServerRole::Follower;
 
@@ -76,7 +76,12 @@ impl Server {
                 Ok(stream) => {
                     let result = Peer::start_handshake(stream, &config, tx.clone());
                     match result {
-                        Ok(peer) => peers.push(peer),
+                        Ok((peer, leases)) => {
+                            peers.push(peer);
+                            if dhcp_pool.leases.len() < leases.len() {
+                                dhcp_pool.leases = leases;
+                            }
+                        }
                         Err(e) => console::warning!("{e:?}"),
                     }
                 }
@@ -120,10 +125,8 @@ impl Server {
             })
             .unwrap();
 
-        // Only node in cluster, become coordinator
-        if self.peers.is_empty() {
-            self.become_coordinator();
-        }
+        // Always start election when joining
+        self.start_election();
 
         // Prevent program seemingly hanging when waiting for first message
         console::render(self.start_time, &format!("{self}"));
@@ -267,7 +270,8 @@ impl Server {
     }
 
     fn handle_set_pool(&mut self, dhcp_pool: DhcpService) {
-        console::log!("Set pool to {dhcp_pool}");
+        let range = dhcp_pool.fmt_range();
+        console::log!("Set pool to {range}");
         self.dhcp_pool = dhcp_pool;
     }
 
@@ -367,7 +371,10 @@ impl Server {
 
         match message {
             Message::Join(peer_id) => {
-                let result = Message::send(&stream, &Message::JoinAck(self.config.id));
+                let result = Message::send(
+                    &stream,
+                    &Message::JoinAck(self.config.id, self.dhcp_pool.leases.clone()),
+                );
                 match result {
                     Ok(_) => {
                         console::log!("Peer {peer_id} joined");
@@ -464,7 +471,10 @@ impl Server {
             peer.send_message(Message::SetMajority(self.majority));
         }
 
-        let pools = self.config.dhcp_pool.divide(self.peers.len() as u32 + 1); // +1 to account for the coordinator
+        let pools = self
+            .config
+            .dhcp_pool
+            .divide(self.peers.len() as u32 + 1, &self.dhcp_pool.leases); // +1 to account for the coordinator
         let mut pools_iter = pools.iter();
 
         // Set own pool

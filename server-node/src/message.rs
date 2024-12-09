@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Message {
     Join(PeerId),
-    JoinAck(PeerId),
+    JoinAck(PeerId, Vec<Lease>),
     Heartbeat,
     Election,
     Okay,

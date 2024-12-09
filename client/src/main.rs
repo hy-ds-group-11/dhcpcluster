@@ -5,6 +5,8 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     error::Error,
     net::ToSocketAddrs,
+    path::{Path, PathBuf},
+    process::exit,
     time::{Duration, Instant},
 };
 
@@ -168,13 +170,26 @@ fn handle_query_command(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut config = Config::load_toml_file("config.toml").unwrap_or_else(|e| {
-        println!("Can't load config.toml");
-        println!("{}", e);
-        println!("Optionally, you may provide server address(es) as CLI arguments");
-        Config::default()
-    });
-    config.servers.extend(std::env::args().skip(1));
+    let config_file_path: PathBuf = std::env::args_os()
+        .nth(1)
+        .unwrap_or("config.toml".into())
+        .into();
+
+    let config = match Config::load_toml_file(&config_file_path) {
+        Ok(config) => config,
+        Err(e1) => {
+            let joined_path = Path::new("client").join(config_file_path.clone());
+            match Config::load_toml_file(&joined_path) {
+                Ok(config) => config,
+                Err(e2) => {
+                    eprintln!("\x1b[93mCouldn't read {config_file_path:?}: {e1}");
+                    eprintln!("Couldn't read {joined_path:?}: {e2}\x1b[0m");
+                    exit(1);
+                }
+            }
+        }
+    };
+
     if config.servers.is_empty() {
         return Err("Can't run without any configured servers".into());
     }

@@ -5,6 +5,7 @@ use std::{
     error::Error,
     net::TcpListener,
     path::{Path, PathBuf},
+    process::exit,
 };
 
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -16,13 +17,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let config = match Config::load_toml_file(&config_file_path) {
         Ok(config) => config,
-        Err(e) => {
-            eprintln!("Didn't find {config_file_path:?}: {e}");
-            match Config::load_toml_file(Path::new("server-node").join(config_file_path.clone())) {
+        Err(e1) => {
+            let joined_path = Path::new("server-node").join(config_file_path.clone());
+            match Config::load_toml_file(&joined_path) {
                 Ok(config) => config,
-                Err(e) => {
-                    eprintln!("Didn't find {config_file_path:?}: {e}");
-                    return Err(e);
+                Err(e2) => {
+                    eprintln!("\x1b[93mCouldn't read {config_file_path:?}: {e1}");
+                    eprintln!("Couldn't read {joined_path:?}: {e2}\x1b[0m");
+                    exit(1);
                 }
             }
         }

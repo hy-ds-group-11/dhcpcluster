@@ -65,6 +65,17 @@ impl DhcpService {
             .unwrap()
     }
 
+    pub fn add_lease(&mut self, lease: Lease) {
+        // TODO: do some sanity checks
+        if let Some(lease) = self.leases.iter_mut().find(|l| {
+            l.hardware_address == lease.hardware_address && l.lease_address == lease.lease_address
+        }) {
+            lease.expiry_timestamp = lease.expiry_timestamp;
+        } else {
+            self.leases.push(lease);
+        }
+    }
+
     pub fn discover_lease(&mut self, mac_address: [u8; 6]) -> Option<Lease> {
         // Check if MAC Address already has an IP
         if let Some(lease) = self
@@ -74,6 +85,11 @@ impl DhcpService {
         {
             return Some(lease.clone());
         }
+
+        // Prune leases
+        let now = SystemTime::now();
+        self.leases.retain(|l| l.expiry_timestamp > now);
+        self.pending_leases.retain(|l| l.expiry_timestamp > now);
 
         for ip_addr in self.start..self.end {
             // TODO: Use HashMap or other more efficient collection

@@ -22,8 +22,7 @@ pub enum Message {
     Election,
     Okay,
     Coordinator,
-    Add(Lease),
-    Update(Lease),
+    Lease(Lease),
     SetPool(DhcpService),
     SetMajority(bool),
 }

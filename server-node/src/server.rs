@@ -259,8 +259,7 @@ impl Server {
             Election => self.handle_election(sender_id, &message),
             Okay => self.handle_okay(sender_id, &message),
             Coordinator => self.handle_coordinator(sender_id),
-            Add(lease) => todo!(),
-            Update(lease) => todo!(),
+            Lease(lease) => self.handle_add_lease(lease),
             SetPool(dhcp_pool) => self.handle_set_pool(dhcp_pool),
             SetMajority(majority) => self.handle_majority(majority),
             _ => panic!("Server received unexpected {message:?} from {sender_id}"),
@@ -308,6 +307,10 @@ impl Server {
         }
     }
 
+    fn handle_add_lease(&mut self, lease: Lease) {
+        self.dhcp_pool.add_lease(lease);
+    }
+
     fn handle_offer_lease(&mut self, mac_address: [u8; 6], tx: Sender<(Lease, u32)>) {
         let lease = match self.dhcp_pool.discover_lease(mac_address) {
             Some(lease) => lease,
@@ -318,7 +321,12 @@ impl Server {
 
     fn handle_confirm_lease(&mut self, mac_address: [u8; 6], ip: Ipv4Addr, tx: Sender<bool>) {
         match self.dhcp_pool.commit_lease(mac_address, ip) {
-            Ok(_) => tx.send(true).unwrap(),
+            Ok(lease) => {
+                tx.send(true).unwrap();
+                for peer in &self.peers {
+                    peer.send_message(Message::Lease(lease.clone()));
+                }
+            }
             Err(e) => {
                 console::warning!("Failed to give ip {ip} to {mac_address:?}\n{e}");
                 tx.send(false).unwrap();

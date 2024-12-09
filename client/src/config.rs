@@ -5,6 +5,16 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct Config {
     pub servers: Vec<String>,
+    pub default_port: u16,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            servers: Vec::new(),
+            default_port: 4321,
+        }
+    }
 }
 
 impl Config {

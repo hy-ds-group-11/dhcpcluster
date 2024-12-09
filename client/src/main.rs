@@ -30,7 +30,8 @@ Supported commands:
     quit
     query N [random|<index>]
     list
-    help"#
+    help
+"#
     );
 }
 
@@ -57,6 +58,7 @@ fn list(config: &Config) {
     for (i, name) in config.servers.iter().enumerate() {
         println!("{i}: {name}");
     }
+    println!();
 }
 
 fn random_server(config: &Config) -> &str {
@@ -69,11 +71,22 @@ fn random_mac_addr() -> [u8; 6] {
     rng.gen()
 }
 
-fn query(server: impl ToSocketAddrs) -> Result<(DhcpOffer, Duration), Box<dyn Error>> {
+fn query(server: &str, default_port: u16) -> Result<(DhcpOffer, Duration), Box<dyn Error>> {
     let start = Instant::now();
 
-    // Resolve server name
-    let mut addrs = server.to_socket_addrs()?.peekable();
+    // Resolve server name, try server itself first
+    let mut addrs = match server.to_socket_addrs() {
+        Ok(addrs) => addrs,
+        Err(e) => {
+            // If the server name did not contain port number, try with default port number
+            if e.kind() == std::io::ErrorKind::InvalidInput {
+                (server, default_port).to_socket_addrs()?
+            } else {
+                return Err(e.into());
+            }
+        }
+    }
+    .peekable();
 
     let mac_addr = random_mac_addr();
 
@@ -116,7 +129,9 @@ fn handle_query_command(
     };
 
     for _ in 0..count {
-        results.push(query(server.unwrap_or_else(|| random_server(config))));
+        let server = server.unwrap_or_else(|| random_server(config));
+        let res = query(server, config.default_port);
+        results.push(res);
     }
 
     match count {
@@ -153,15 +168,23 @@ fn handle_query_command(
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut config = Config::load_toml_file("config.toml")?;
+    let mut config = Config::load_toml_file("config.toml").unwrap_or_else(|e| {
+        println!("Can't load config.toml");
+        println!("{}", e);
+        println!("Optionally, you may provide server address(es) as CLI arguments");
+        Config::default()
+    });
     config.servers.extend(std::env::args().skip(1));
+    if config.servers.is_empty() {
+        return Err("Can't run without any configured servers".into());
+    }
 
     list(&config);
     help();
 
     let mut rl = DefaultEditor::new()?;
     loop {
-        let readline = rl.readline("\n> ");
+        let readline = rl.readline("> ");
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;

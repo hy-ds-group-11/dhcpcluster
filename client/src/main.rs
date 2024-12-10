@@ -5,7 +5,7 @@ use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     error::Error,
     io,
-    net::{TcpStream, ToSocketAddrs},
+    net::{SocketAddr, TcpStream, ToSocketAddrs},
     num::ParseIntError,
     ops::Range,
     path::{Path, PathBuf},
@@ -40,7 +40,15 @@ enum Command<'a> {
     Query(Query<'a>),
     List,
     Help,
+    Conf,
     Quit,
+}
+
+fn print_error(error: impl Error) {
+    eprintln!("\x1b[93m{error}\x1b[0m");
+    if let Some(source) = error.source() {
+        eprintln!("{source}");
+    }
 }
 
 fn help() {
@@ -58,12 +66,14 @@ Supported commands:
             <host>    arbitrary host, e.g. dhcp.example.com:4321
     list
         Lists configured servers
+    conf
+        Print current configuration
     help
         Prints this help
     quit
         Exit the CLI
 
-Supported shorthands: qr, ls, h, q
+Supported shorthands: qr, ls, cf, h, q
 "#
     );
 }
@@ -126,6 +136,7 @@ fn parse_command(line: &str) -> Result<Command, CommandParseError> {
         ["exit" | "quit" | "q"] => Ok(Command::Quit),
         ["query" | "qr", args @ ..] => Ok(Command::Query(Query::parse(args)?)),
         ["list" | "ls"] => Ok(Command::List),
+        ["conf" | "cf"] => Ok(Command::Conf),
         ["help" | "h"] => Ok(Command::Help),
         [] => Ok(Command::Nop),
         [cmd, ..] => Err(CommandParseError::UnrecognizedCommand(cmd)),
@@ -151,20 +162,51 @@ fn random_mac_addr() -> [u8; 6] {
 }
 
 #[derive(Error, Debug)]
-enum QueryError {
-    #[error("Name resolution failed")]
-    NameResolution(#[from] io::Error),
-    #[error("The server is unreachable")]
-    UnreachableServer,
-    #[error("Communication with the server failed")]
-    Communication(#[from] CommunicationError),
-    #[error("Server replied to Request with Nack")]
-    RequestNack,
-    #[error("Server replied to Discover with Nack")]
-    DiscoverNack,
+enum QueryError<'a> {
+    #[error("Name resolution failed for {server}")]
+    NameResolution { server: &'a str, source: io::Error },
+    #[error("Failed to set socket timeout")]
+    SetSocketTimeout { source: io::Error },
+    #[error("Failed to establish a connection to {server}")]
+    Connect { server: &'a str, source: io::Error },
+    #[error("The server name {server} resolved to 0 addresses, can't reach server")]
+    UnreachableServer { server: &'a str },
+    #[error("Communication with {server} failed")]
+    Communication {
+        server: &'a str,
+        source: CommunicationError,
+    },
+    #[error("Server {server} replied to Request with Nack")]
+    RequestNack { server: &'a str },
+    #[error("Server {server} replied to Discover with Nack")]
+    DiscoverNack { server: &'a str },
 }
 
-fn query(server: &str, default_port: u16) -> Result<(DhcpOffer, Duration), QueryError> {
+fn connect_timeout<'a>(
+    addr: &SocketAddr,
+    timeout: Option<Duration>,
+    server: &'a str,
+) -> Result<TcpStream, QueryError<'a>> {
+    let stream = if let Some(timeout) = timeout {
+        TcpStream::connect_timeout(addr, timeout)
+    } else {
+        TcpStream::connect(addr)
+    }
+    .map_err(|e| QueryError::Connect { server, source: e })?;
+    stream
+        .set_read_timeout(timeout)
+        .map_err(|e| QueryError::SetSocketTimeout { source: e })?;
+    stream
+        .set_write_timeout(timeout)
+        .map_err(|e| QueryError::SetSocketTimeout { source: e })?;
+    Ok(stream)
+}
+
+fn query(
+    server: &str,
+    default_port: u16,
+    timeout: Option<Duration>,
+) -> Result<(DhcpOffer, Duration), QueryError> {
     let start = Instant::now();
 
     // Resolve server name, try server itself first
@@ -173,9 +215,11 @@ fn query(server: &str, default_port: u16) -> Result<(DhcpOffer, Duration), Query
         Err(e) => {
             // If the server name did not contain port number, try with default port number
             if e.kind() == std::io::ErrorKind::InvalidInput {
-                (server, default_port).to_socket_addrs()?
+                (server, default_port)
+                    .to_socket_addrs()
+                    .map_err(|e| QueryError::NameResolution { server, source: e })?
             } else {
-                return Err(QueryError::NameResolution(e));
+                return Err(QueryError::NameResolution { server, source: e });
             }
         }
     }
@@ -184,23 +228,25 @@ fn query(server: &str, default_port: u16) -> Result<(DhcpOffer, Duration), Query
     let mac_addr = random_mac_addr();
 
     while let Some(addr) = addrs.next() {
-        let stream = TcpStream::connect(addr)?;
+        let stream = connect_timeout(&addr, timeout, server)?;
         match client::get_offer(&stream, mac_addr) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
-                None => return Err(e.into()),
+                None => return Err(QueryError::Communication { server, source: e }),
             },
             Ok(Some(offer @ DhcpOffer { ip, .. })) => {
-                if client::get_ack(&stream, mac_addr, ip)? {
+                if client::get_ack(&stream, mac_addr, ip)
+                    .map_err(|e| QueryError::Communication { server, source: e })?
+                {
                     return Ok((offer, start.elapsed()));
                 } else {
-                    return Err(QueryError::RequestNack);
+                    return Err(QueryError::RequestNack { server });
                 }
             }
-            Ok(None) => return Err(QueryError::DiscoverNack),
+            Ok(None) => return Err(QueryError::DiscoverNack { server }),
         }
     }
-    Err(QueryError::UnreachableServer)
+    Err(QueryError::UnreachableServer { server })
 }
 
 #[derive(Error, Debug)]
@@ -223,7 +269,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
     for _ in 0..cmd.batch {
         let server = server.unwrap_or_else(|| random_server(config));
         let res = match cmd.mode {
-            QueryMode::Discover => query(server, config.default_port),
+            QueryMode::Discover => query(server, config.default_port, config.timeout),
             QueryMode::Renew => todo!(),
         };
         results.push(res);
@@ -238,7 +284,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
             for res in results {
                 match res {
                     Ok((offer, dur)) => println!("{offer:?} received in {dur:.3?}"),
-                    Err(e) => println!("failed: \x1b[93m{e}\x1b[0m"),
+                    Err(e) => print_error(e),
                 }
             }
         }
@@ -289,14 +335,8 @@ fn main() -> Result<(), ReadlineError> {
             match Config::load_toml_file(&joined_path) {
                 Ok(config) => config,
                 Err(e2) => {
-                    eprintln!("\x1b[93m{e1}\x1b[0m");
-                    if let Some(source) = e1.source() {
-                        eprintln!("{source}");
-                    }
-                    eprintln!("\x1b[93m{e2}\x1b[0m");
-                    if let Some(source) = e2.source() {
-                        eprintln!("{source}");
-                    }
+                    print_error(e1);
+                    print_error(e2);
                     exit(1);
                 }
             }
@@ -317,11 +357,12 @@ fn main() -> Result<(), ReadlineError> {
                     Ok(Nop) => {}
                     Ok(Quit) => break,
                     Ok(Query(query)) => {
-                        handle_query_command(query, &config).unwrap_or_else(|e| eprintln!("{e}"))
+                        handle_query_command(query, &config).unwrap_or_else(print_error)
                     }
                     Ok(List) => list(&config),
+                    Ok(Conf) => println!("{config:#?}"),
                     Ok(Help) => help(),
-                    Err(e) => eprintln!("{e}"),
+                    Err(e) => print_error(e),
                 }
             }
             Err(ReadlineError::Interrupted) => {

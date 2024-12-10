@@ -1,22 +1,38 @@
 use std::{
     ffi::OsStr,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use thiserror::Error;
 
 use serde::Deserialize;
 
 #[derive(Deserialize)]
+struct ConfigFile {
+    servers: Vec<String>,
+    default_port: u16,
+    timeout: Option<u64>,
+}
+
+#[derive(Debug)]
 pub struct Config {
     pub servers: Vec<String>,
     pub default_port: u16,
+    pub timeout: Option<Duration>,
 }
 
-impl Default for Config {
-    fn default() -> Self {
+impl From<ConfigFile> for Config {
+    fn from(
+        ConfigFile {
+            servers,
+            default_port,
+            timeout,
+        }: ConfigFile,
+    ) -> Self {
         Self {
-            servers: Vec::new(),
-            default_port: 4321,
+            servers,
+            default_port,
+            timeout: timeout.map(Duration::from_secs),
         }
     }
 }
@@ -47,10 +63,10 @@ impl Config {
             path: path.to_path_buf(),
             source: e,
         })?;
-        let conf: Config = toml::from_str(&toml).map_err(|e| Error::ParseFile {
+        let conf: ConfigFile = toml::from_str(&toml).map_err(|e| Error::ParseFile {
             path: path.to_path_buf(),
             source: e,
         })?;
-        Ok(conf)
+        Ok(conf.into())
     }
 }

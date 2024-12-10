@@ -18,6 +18,14 @@ use std::{
 };
 
 #[derive(Debug)]
+pub struct LeaseOffer {
+    lease: Lease,
+    subnet_mask: u32,
+}
+
+type LeaseConfirmation = bool;
+
+#[derive(Debug)]
 pub enum ServerThreadMessage {
     NewConnection(TcpStream),
     PeerLost(PeerId),
@@ -26,14 +34,14 @@ pub enum ServerThreadMessage {
         sender_id: PeerId,
         message: Message,
     },
-    OfferLease {
+    LeaseRequest {
         mac_address: MacAddr,
-        tx: Sender<(Lease, u32)>,
+        tx: Sender<LeaseOffer>,
     },
-    ConfirmLease {
+    ConfirmRequest {
         mac_address: MacAddr,
         ip: Ipv4Addr,
-        tx: Sender<bool>,
+        tx: Sender<LeaseConfirmation>,
     },
 }
 
@@ -162,8 +170,8 @@ impl Server {
                 ProtocolMessage { sender_id, message } => {
                     self.handle_protocol_message(sender_id, message)
                 }
-                OfferLease { mac_address, tx } => self.handle_offer_lease(mac_address, tx),
-                ConfirmLease {
+                LeaseRequest { mac_address, tx } => self.handle_offer_lease(mac_address, tx),
+                ConfirmRequest {
                     mac_address,
                     ip,
                     tx,
@@ -200,22 +208,22 @@ impl Server {
         server_tx: Sender<ServerThreadMessage>,
         mac_address: MacAddr,
     ) {
-        let (tx, rx) = channel::<(Lease, u32)>();
+        let (tx, rx) = channel::<LeaseOffer>();
         server_tx
-            .send(ServerThreadMessage::OfferLease { mac_address, tx })
+            .send(ServerThreadMessage::LeaseRequest { mac_address, tx })
             .unwrap();
 
         // Wait for processing DHCP discover
-        let (offer, subnet_mask) = match rx.recv() {
-            Ok(data) => data,
+        let LeaseOffer { lease, subnet_mask } = match rx.recv() {
+            Ok(offer) => offer,
             Err(_) => {
                 DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap();
                 return;
             }
         };
 
-        let ip = offer.lease_address;
-        let lease_time = offer
+        let ip = lease.lease_address;
+        let lease_time = lease
             .expiry_timestamp
             .duration_since(SystemTime::now())
             .unwrap()
@@ -230,11 +238,11 @@ impl Server {
         )
         .unwrap();
         let result = DhcpClientMessage::recv_timeout(&stream, Duration::from_secs(10));
-        let (tx, rx) = channel::<bool>();
+        let (tx, rx) = channel::<LeaseConfirmation>();
         match result {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 server_tx
-                    .send(ServerThreadMessage::ConfirmLease {
+                    .send(ServerThreadMessage::ConfirmRequest {
                         mac_address,
                         ip,
                         tx,
@@ -259,9 +267,9 @@ impl Server {
         mac_address: MacAddr,
         ip: Ipv4Addr,
     ) {
-        let (tx, rx) = channel::<bool>();
+        let (tx, rx) = channel::<LeaseConfirmation>();
         server_tx
-            .send(ServerThreadMessage::ConfirmLease {
+            .send(ServerThreadMessage::ConfirmRequest {
                 mac_address,
                 ip,
                 tx,
@@ -334,7 +342,7 @@ impl Server {
         self.dhcp_pool.add_lease(lease);
     }
 
-    fn handle_offer_lease(&mut self, mac_address: MacAddr, tx: Sender<(Lease, u32)>) {
+    fn handle_offer_lease(&mut self, mac_address: MacAddr, tx: Sender<LeaseOffer>) {
         if !self.majority {
             return;
         }
@@ -343,10 +351,19 @@ impl Server {
             Some(lease) => lease,
             None => return,
         };
-        tx.send((lease, self.config.prefix_length)).unwrap();
+        tx.send(LeaseOffer {
+            lease,
+            subnet_mask: self.config.prefix_length,
+        })
+        .unwrap();
     }
 
-    fn handle_confirm_lease(&mut self, mac_address: MacAddr, ip: Ipv4Addr, tx: Sender<bool>) {
+    fn handle_confirm_lease(
+        &mut self,
+        mac_address: MacAddr,
+        ip: Ipv4Addr,
+        tx: Sender<LeaseConfirmation>,
+    ) {
         if !self.majority {
             return;
         }

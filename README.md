@@ -3,7 +3,7 @@
 A University of Helsinki **Distributed Systems** Course Project
 
 
-https://github.com/user-attachments/assets/34c93146-e0de-4530-9dd1-dfa22c29f159
+https://github.com/user-attachments/assets/7330d8de-9707-465b-840f-c8a18cb829f2
 
 
 Fall 2024, Group 11

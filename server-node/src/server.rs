@@ -162,7 +162,6 @@ impl Server {
         let rx = self.rx.take().unwrap();
         use ServerThreadMessage::*;
         for message in rx.iter() {
-            #[allow(unused)]
             match message {
                 NewConnection(tcp_stream) => self.answer_handshake(tcp_stream),
                 PeerLost(peer_id) => self.remove_peer(peer_id),
@@ -284,7 +283,6 @@ impl Server {
 
     fn handle_protocol_message(&mut self, sender_id: PeerId, message: Message) {
         use Message::*;
-        #[allow(unused_variables)]
         match message {
             Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
             Election => self.handle_election(sender_id, &message),

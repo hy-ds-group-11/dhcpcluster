@@ -47,34 +47,34 @@ enum Command<'a> {
 fn print_error(error: impl Error) {
     eprintln!("\x1b[93m{error}\x1b[0m");
     if let Some(source) = error.source() {
-        eprintln!("{source}");
+        eprintln!("\x1b[35m{source}\x1b[0m");
     }
 }
 
 fn help() {
     println!(
-        r#"---- DHCP Client ----
+        "---- DHCP Client ----
 Supported commands:
-    query [OPTION]... [SERVER]
-        OPTION:
-            -n N  number of batch queries (default: 1)
-            -r    renew
-            -v    print all responses even when batch querying
-        SERVER: 
-            random    pick randomly from configured servers (default)
-            <index>   index number of server to connect to (see list)
-            <host>    arbitrary host, e.g. dhcp.example.com:4321
-    list
-        Lists configured servers
-    conf
+    \x1b[32mquery\x1b[0m [\x1b[36mOPTION\x1b[0m]... [\x1b[36mSERVER\x1b[0m]
+        \x1b[36mOPTION\x1b[0m:
+            -n N    number of batch queries (default: 1)
+            -r      renew
+            -v      print all responses even when batch querying
+        \x1b[36mSERVER\x1b[0m: 
+            random  pick randomly from configured servers (default)
+            <index> index number of server to connect to (see list)
+            <host>  arbitrary host, e.g. dhcp.example.com:4321
+    \x1b[32mlist\x1b[0m
+        List configured servers
+    \x1b[32mconf\x1b[0m
         Print current configuration
-    help
-        Prints this help
-    quit
+    \x1b[32mhelp\x1b[0m
+        Print this help
+    \x1b[32mquit\x1b[0m
         Exit the CLI
 
 Supported shorthands: qr, ls, cf, h, q
-"#
+"
     );
 }
 
@@ -146,7 +146,7 @@ fn parse_command(line: &str) -> Result<Command, CommandParseError> {
 fn list(config: &Config) {
     println!("---- Configured Servers ----");
     for (i, name) in config.servers.iter().enumerate() {
-        println!("{i}: {name}");
+        println!("\x1b[36m{i}\x1b[0m: {name}");
     }
     println!();
 }
@@ -377,7 +377,7 @@ fn main() -> Result<(), ReadlineError> {
                         handle_query_command(query, &config).unwrap_or_else(print_error)
                     }
                     Ok(List) => list(&config),
-                    Ok(Conf) => println!("{config:#?}"),
+                    Ok(Conf) => println!("\x1b[32m{config:#?}\x1b[0m"),
                     Ok(Help) => help(),
                     Err(e) => print_error(e),
                 }

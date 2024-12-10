@@ -565,7 +565,7 @@ impl Display for Server {
         // Majority and dhcp address
         write_label(f, "Service")?;
         if self.majority {
-            writeln!(f, "Accepting at {}", self.config.dhcp_address)?;
+            writeln!(f, "{}", self.config.dhcp_address)?;
         } else {
             writeln!(f, "No majority")?;
         }

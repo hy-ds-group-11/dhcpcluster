@@ -40,6 +40,16 @@ pub struct DhcpOffer {
     pub subnet_mask: u32,
 }
 
+impl Display for DhcpOffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}/{} for {}s",
+            self.ip, self.subnet_mask, self.lease_time,
+        )
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum DhcpServerMessage {
     Offer(DhcpOffer),

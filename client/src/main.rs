@@ -4,6 +4,7 @@ use rand::Rng;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     error::Error,
+    fmt::Display,
     io,
     net::{SocketAddr, TcpStream, ToSocketAddrs},
     num::ParseIntError,
@@ -209,6 +210,16 @@ struct QuerySuccess<'a> {
     time: Duration,
 }
 
+impl Display for QuerySuccess<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Got lease \x1b[32m{}\x1b[0m, from \x1b[32m{}\x1b[0m in \x1b[32m{:.3?}\x1b[0m",
+            self.offer, self.server, self.time,
+        )
+    }
+}
+
 fn query(
     server: &str,
     default_port: u16,
@@ -294,13 +305,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
         (1, _) | (_, true) => {
             for res in results {
                 match res {
-                    Ok(QuerySuccess {
-                        offer,
-                        server,
-                        time,
-                    }) => {
-                        println!("{offer:?} received from {server} in {time:.3?}")
-                    }
+                    Ok(success) => println!("{success}"),
                     Err(e) => print_error(e),
                 }
             }

@@ -54,6 +54,7 @@ pub struct DhcpService {
     pub lease_time: Duration,
     pub leases: Vec<Lease>,
     pub pending_leases: Vec<Lease>,
+    next_candidate_address: u32,
 }
 
 impl DhcpService {
@@ -63,6 +64,7 @@ impl DhcpService {
             lease_time,
             leases: leases.into(),
             pending_leases: Vec::new(),
+            next_candidate_address: start,
         }
     }
 
@@ -124,24 +126,36 @@ impl DhcpService {
         self.leases.retain(|l| l.expiry_timestamp > now);
         self.pending_leases.retain(|l| l.expiry_timestamp > now);
 
-        for ip_addr in self.range.iter() {
-            // TODO: Use HashMap or other more efficient collection
-            if self
-                .leases
-                .iter()
-                .chain(self.pending_leases.iter())
-                .any(|l| l.lease_address.to_bits() == ip_addr)
-            {
-                continue;
-            }
+        // First check a range starting from the last address given
+        // Fall back to checking from the start of the full range
+        let ranges_to_check = vec![
+            Ipv4Range::new(self.next_candidate_address, self.range.end),
+            Ipv4Range::new(self.range.start, self.next_candidate_address),
+        ];
+        for range in ranges_to_check {
+            for ip_addr in range.iter() {
+                // TODO: Use HashMap or other more efficient collection
+                if self
+                    .leases
+                    .iter()
+                    .chain(self.pending_leases.iter())
+                    .any(|l| l.lease_address.to_bits() == ip_addr)
+                {
+                    continue;
+                }
 
-            let lease = Lease {
-                hardware_address: mac_address,
-                lease_address: Ipv4Addr::from_bits(ip_addr),
-                expiry_timestamp: self.fresh_timestamp(),
-            };
-            self.pending_leases.push(lease.clone());
-            return Some(lease);
+                // This won't overflow the range end
+                // because the maximum value of ip_addr is range.end - 1
+                self.next_candidate_address = ip_addr + 1;
+
+                let lease = Lease {
+                    hardware_address: mac_address,
+                    lease_address: Ipv4Addr::from_bits(ip_addr),
+                    expiry_timestamp: self.fresh_timestamp(),
+                };
+                self.pending_leases.push(lease.clone());
+                return Some(lease);
+            }
         }
 
         None

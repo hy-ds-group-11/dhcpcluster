@@ -2,6 +2,10 @@
 
 A University of Helsinki **Distributed Systems** Course Project
 
+
+https://github.com/user-attachments/assets/34c93146-e0de-4530-9dd1-dfa22c29f159
+
+
 Fall 2024, Group 11
 
 This repository contains a distributed DHCP server with shared state and a CLI for testing the server.

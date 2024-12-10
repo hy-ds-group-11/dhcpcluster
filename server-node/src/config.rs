@@ -17,6 +17,7 @@ use std::{
 
 use crate::{dhcp::DhcpService, peer::PeerId};
 
+// TODO: Make the field names consistent (e.g. address- prefix/postfix)
 #[derive(Deserialize, Debug)]
 struct ConfigFile {
     address_private: SocketAddr,

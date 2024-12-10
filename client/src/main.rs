@@ -1,5 +1,5 @@
 use client::{config::Config, CommunicationError};
-use protocol::DhcpOffer;
+use protocol::{DhcpOffer, MacAddr};
 use rand::Rng;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
@@ -156,9 +156,10 @@ fn random_server(config: &Config) -> &str {
     config.servers[rng.gen_range(0..config.servers.len())].as_str()
 }
 
-fn random_mac_addr() -> [u8; 6] {
+fn random_mac_addr() -> MacAddr {
     let mut rng = rand::thread_rng();
-    rng.gen()
+    let bytes: [u8; 6] = rng.gen();
+    bytes.into()
 }
 
 #[derive(Error, Debug)]

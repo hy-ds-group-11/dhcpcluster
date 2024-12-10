@@ -3,15 +3,34 @@
 
 use serde::{Deserialize, Serialize};
 use std::{
+    fmt::Display,
     io::Error,
     net::{Ipv4Addr, TcpStream},
     time::Duration,
 };
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+pub struct MacAddr([u8; 6]);
+
+impl From<[u8; 6]> for MacAddr {
+    fn from(value: [u8; 6]) -> Self {
+        Self(value)
+    }
+}
+
+impl Display for MacAddr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for byte in self.0.iter().take(5) {
+            write!(f, "{:0>2X}:", byte)?;
+        }
+        write!(f, "{:0>2X}", self.0[5])
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 pub enum DhcpClientMessage {
-    Discover { mac_address: [u8; 6] },
-    Request { mac_address: [u8; 6], ip: Ipv4Addr },
+    Discover { mac_address: MacAddr },
+    Request { mac_address: MacAddr, ip: Ipv4Addr },
 }
 
 #[derive(Serialize, Deserialize, Debug)]

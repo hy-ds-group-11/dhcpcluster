@@ -7,7 +7,7 @@ use crate::{
     thread_pool::ThreadPool,
     ThreadJoin,
 };
-use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, RecvCbor, SendCbor};
+use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbor, SendCbor};
 use std::{
     error::Error,
     fmt::Display,
@@ -27,11 +27,11 @@ pub enum ServerThreadMessage {
         message: Message,
     },
     OfferLease {
-        mac_address: [u8; 6],
+        mac_address: MacAddr,
         tx: Sender<(Lease, u32)>,
     },
     ConfirmLease {
-        mac_address: [u8; 6],
+        mac_address: MacAddr,
         ip: Ipv4Addr,
         tx: Sender<bool>,
     },
@@ -178,7 +178,7 @@ impl Server {
     fn handle_discover(
         stream: TcpStream,
         server_tx: Sender<ServerThreadMessage>,
-        mac_address: [u8; 6],
+        mac_address: MacAddr,
     ) {
         let (tx, rx) = channel::<(Lease, u32)>();
         server_tx
@@ -236,7 +236,7 @@ impl Server {
     fn handle_renew(
         stream: TcpStream,
         server_tx: Sender<ServerThreadMessage>,
-        mac_address: [u8; 6],
+        mac_address: MacAddr,
         ip: Ipv4Addr,
     ) {
         let (tx, rx) = channel::<bool>();
@@ -270,8 +270,7 @@ impl Server {
     }
 
     fn handle_set_pool(&mut self, dhcp_pool: DhcpService) {
-        let range = dhcp_pool.fmt_range();
-        console::log!("Set pool to {range}");
+        console::log!("Set pool to {}", dhcp_pool.range);
         self.dhcp_pool = dhcp_pool;
     }
 
@@ -315,7 +314,7 @@ impl Server {
         self.dhcp_pool.add_lease(lease);
     }
 
-    fn handle_offer_lease(&mut self, mac_address: [u8; 6], tx: Sender<(Lease, u32)>) {
+    fn handle_offer_lease(&mut self, mac_address: MacAddr, tx: Sender<(Lease, u32)>) {
         let lease = match self.dhcp_pool.discover_lease(mac_address) {
             Some(lease) => lease,
             None => return,
@@ -323,7 +322,7 @@ impl Server {
         tx.send((lease, self.config.prefix_length)).unwrap();
     }
 
-    fn handle_confirm_lease(&mut self, mac_address: [u8; 6], ip: Ipv4Addr, tx: Sender<bool>) {
+    fn handle_confirm_lease(&mut self, mac_address: MacAddr, ip: Ipv4Addr, tx: Sender<bool>) {
         match self.dhcp_pool.commit_lease(mac_address, ip) {
             Ok(lease) => {
                 tx.send(true).unwrap();

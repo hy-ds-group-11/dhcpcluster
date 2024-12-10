@@ -1,8 +1,8 @@
 pub mod config;
 
 use protocol::{
-    CborRecvError, CborSendError, DhcpClientMessage, DhcpOffer, DhcpServerMessage, RecvCbor,
-    SendCbor,
+    CborRecvError, CborSendError, DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr,
+    RecvCbor, SendCbor,
 };
 use std::net::{Ipv4Addr, TcpStream};
 use thiserror::Error;
@@ -19,7 +19,7 @@ pub enum CommunicationError {
 
 pub fn get_offer(
     stream: &TcpStream,
-    mac_address: [u8; 6],
+    mac_address: MacAddr,
 ) -> Result<Option<DhcpOffer>, CommunicationError> {
     DhcpClientMessage::send(stream, &DhcpClientMessage::Discover { mac_address })?;
     let response = DhcpServerMessage::recv(stream)?;
@@ -32,7 +32,7 @@ pub fn get_offer(
 
 pub fn get_ack(
     stream: &TcpStream,
-    mac_address: [u8; 6],
+    mac_address: MacAddr,
     ip: Ipv4Addr,
 ) -> Result<bool, CommunicationError> {
     DhcpClientMessage::send(stream, &DhcpClientMessage::Request { mac_address, ip })?;

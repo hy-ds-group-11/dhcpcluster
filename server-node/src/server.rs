@@ -59,26 +59,35 @@ pub struct Server {
 }
 
 impl Server {
-    /// Initialize shared state, and try connecting to peers.
-    /// Failed handshakes are ignored, since they might be nodes that are starting later.
-    /// After connecting to peers, you probably want to call [`Server::start`].
-    pub fn connect(config: Config) -> Self {
-        let start_time = SystemTime::now();
-        let coordinator_id = None;
-        let mut dhcp_pool = config.dhcp_pool.clone();
-        let mut peers = Vec::new();
-        let local_role = ServerRole::Follower;
-
+    /// Create new Server
+    /// After creating the server, you probably want to call [`Server::start`].
+    pub fn new(config: Config) -> Self {
         let (tx, rx) = channel::<ServerThreadMessage>();
 
-        for peer_address in &config.peers {
+        Self {
+            config: config.clone(),
+            rx: Some(rx),
+            tx,
+            coordinator_id: None,
+            dhcp_pool: config.dhcp_pool,
+            peers: Vec::new(),
+            local_role: ServerRole::Follower,
+            start_time: SystemTime::now(),
+            majority: false,
+        }
+    }
+
+    /// Try connecting to peers.
+    /// Failed handshakes are ignored, since they might be nodes that are starting later.
+    pub fn connect(&mut self) {
+        for peer_address in &self.config.peers {
             match peer_address.to_socket_addrs() {
                 Ok(addrs) => {
                     for addr in addrs {
                         console::log!("Connecting to {peer_address}");
-                        console::render(start_time, "");
+                        console::render(self.start_time, "");
 
-                        let result = if let Some(timeout) = config.peer_connection_timeout {
+                        let result = if let Some(timeout) = self.config.peer_connection_timeout {
                             TcpStream::connect_timeout(&addr, timeout)
                         } else {
                             TcpStream::connect(addr)
@@ -86,11 +95,11 @@ impl Server {
 
                         match result {
                             Ok(stream) => {
-                                match Peer::start_handshake(stream, &config, tx.clone()) {
+                                match Peer::start_handshake(stream, &self.config, self.tx.clone()) {
                                     Ok((peer, leases)) => {
-                                        peers.push(peer);
-                                        if dhcp_pool.leases.len() < leases.len() {
-                                            dhcp_pool.leases = leases;
+                                        self.peers.push(peer);
+                                        if self.dhcp_pool.leases.len() < leases.len() {
+                                            self.dhcp_pool.leases = leases;
                                         }
                                     }
                                     Err(e) => console::warning!(
@@ -108,18 +117,6 @@ impl Server {
                 Err(e) => console::warning!("Name resolution failed for {peer_address}: {e}"),
             }
         }
-
-        Self {
-            config,
-            rx: Some(rx),
-            tx,
-            coordinator_id,
-            dhcp_pool,
-            peers,
-            local_role,
-            start_time,
-            majority: false,
-        }
     }
 
     /// Start listening to incoming connections from server peers and DHCP clients.
@@ -136,6 +133,8 @@ impl Server {
             .name(format!("{}::peer_listener_thread", module_path!()))
             .spawn(move || Self::listen_nodes(peer_listener, peer_tx))
             .unwrap();
+
+        self.connect();
 
         let client_tx = self.tx.clone();
         let client_listener_thread = thread::Builder::new()

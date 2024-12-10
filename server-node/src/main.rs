@@ -32,7 +32,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let peer_listener = TcpListener::bind(config.address_private)?;
     let client_listener = TcpListener::bind(config.dhcp_address)?;
-    let server = Server::connect(config);
+    let server = Server::new(config);
     server.start(peer_listener, client_listener)?;
 
     Ok(())

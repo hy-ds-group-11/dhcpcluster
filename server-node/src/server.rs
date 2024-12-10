@@ -335,6 +335,10 @@ impl Server {
     }
 
     fn handle_offer_lease(&mut self, mac_address: MacAddr, tx: Sender<(Lease, u32)>) {
+        if !self.majority {
+            return;
+        }
+
         let lease = match self.dhcp_pool.discover_lease(mac_address) {
             Some(lease) => lease,
             None => return,
@@ -343,6 +347,10 @@ impl Server {
     }
 
     fn handle_confirm_lease(&mut self, mac_address: MacAddr, ip: Ipv4Addr, tx: Sender<bool>) {
+        if !self.majority {
+            return;
+        }
+
         match self.dhcp_pool.commit_lease(mac_address, ip) {
             Ok(lease) => {
                 tx.send(true).unwrap();
@@ -515,7 +523,7 @@ impl Display for Server {
         let write_label = |f: &mut std::fmt::Formatter<'_>, label| write!(f, "    {label:<16} ");
 
         let title = format!(
-            "Server {} listening on {}",
+            "Server {} listening to peers on {}",
             self.config.id, self.config.address_private
         );
         let mut hline = title.chars().map(|_| '-').collect::<String>();
@@ -553,6 +561,14 @@ impl Display for Server {
         // Role
         write_label(f, "Current role")?;
         writeln!(f, "{:?}", self.local_role)?;
+
+        // Majority and dhcp address
+        write_label(f, "Service")?;
+        if self.majority {
+            writeln!(f, "Accepting at {}", self.config.dhcp_address)?;
+        } else {
+            writeln!(f, "No majority")?;
+        }
 
         // Pool assignment
         write_label(f, "Assigned range")?;

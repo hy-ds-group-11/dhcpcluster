@@ -11,7 +11,7 @@ use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbo
 use std::{
     error::Error,
     fmt::Display,
-    net::{Ipv4Addr, TcpListener, TcpStream},
+    net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
     sync::mpsc::{channel, Receiver, Sender},
     thread,
     time::{Duration, SystemTime},
@@ -72,20 +72,40 @@ impl Server {
         let (tx, rx) = channel::<ServerThreadMessage>();
 
         for peer_address in &config.peers {
-            match TcpStream::connect(peer_address) {
-                Ok(stream) => {
-                    let result = Peer::start_handshake(stream, &config, tx.clone());
-                    match result {
-                        Ok((peer, leases)) => {
-                            peers.push(peer);
-                            if dhcp_pool.leases.len() < leases.len() {
-                                dhcp_pool.leases = leases;
+            match peer_address.to_socket_addrs() {
+                Ok(addrs) => {
+                    for addr in addrs {
+                        console::log!("Connecting to {peer_address}");
+                        console::render(start_time, "");
+
+                        let result = if let Some(timeout) = config.peer_connection_timeout {
+                            TcpStream::connect_timeout(&addr, timeout)
+                        } else {
+                            TcpStream::connect(addr)
+                        };
+
+                        match result {
+                            Ok(stream) => {
+                                match Peer::start_handshake(stream, &config, tx.clone()) {
+                                    Ok((peer, leases)) => {
+                                        peers.push(peer);
+                                        if dhcp_pool.leases.len() < leases.len() {
+                                            dhcp_pool.leases = leases;
+                                        }
+                                    }
+                                    Err(e) => console::warning!(
+                                        "Handshake with peer {peer_address} failed: {e}"
+                                    ),
+                                }
+                                break; // Stop trying peer when connect has succeeded, regardless of handshake result
+                            }
+                            Err(e) => {
+                                console::warning!("Can't connect to peer {peer_address}: {e}")
                             }
                         }
-                        Err(e) => console::warning!("{e:?}"),
                     }
                 }
-                Err(e) => console::warning!("Connection refused to peer {peer_address}\n{e:?}"),
+                Err(e) => console::warning!("Name resolution failed for {peer_address}: {e}"),
             }
         }
 

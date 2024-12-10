@@ -23,6 +23,7 @@ struct ConfigFile {
     peers: Vec<String>,
     id: PeerId,
     heartbeat_timeout: u64,
+    peer_connection_timeout: Option<u64>,
     net: Ipv4Addr,
     prefix_length: u32,
     lease_time: u64,
@@ -47,6 +48,7 @@ pub struct Config {
     pub peers: Vec<String>,
     pub id: PeerId,
     pub heartbeat_timeout: Duration,
+    pub peer_connection_timeout: Option<Duration>,
     pub prefix_length: u32,
     pub dhcp_pool: DhcpService,
     pub dhcp_address: SocketAddr,
@@ -68,6 +70,7 @@ impl From<ConfigFile> for Config {
             lease_time,
             dhcp_address,
             thread_count,
+            peer_connection_timeout,
         }: ConfigFile,
     ) -> Self {
         Self {
@@ -79,6 +82,11 @@ impl From<ConfigFile> for Config {
             dhcp_pool: DhcpService::from_cidr(net, prefix_length, Duration::from_secs(lease_time)),
             dhcp_address,
             thread_count,
+            // If None in ConfigFile, default to 10 seconds
+            // If defined as Some(0), set None to Config
+            peer_connection_timeout: peer_connection_timeout
+                .map(|sec| (sec != 0).then_some(Duration::from_secs(sec)))
+                .unwrap_or(Some(Duration::from_secs(10))),
         }
     }
 }

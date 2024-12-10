@@ -203,11 +203,17 @@ fn connect_timeout<'a>(
     Ok(stream)
 }
 
+struct QuerySuccess<'a> {
+    offer: DhcpOffer,
+    server: &'a str,
+    time: Duration,
+}
+
 fn query(
     server: &str,
     default_port: u16,
     timeout: Option<Duration>,
-) -> Result<(DhcpOffer, Duration), QueryError> {
+) -> Result<QuerySuccess, QueryError> {
     let start = Instant::now();
 
     // Resolve server name, try server itself first
@@ -239,7 +245,11 @@ fn query(
                 if client::get_ack(&stream, mac_addr, ip)
                     .map_err(|e| QueryError::Communication { server, source: e })?
                 {
-                    return Ok((offer, start.elapsed()));
+                    return Ok(QuerySuccess {
+                        offer,
+                        server,
+                        time: start.elapsed(),
+                    });
                 } else {
                     return Err(QueryError::RequestNack { server });
                 }
@@ -284,7 +294,13 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
         (1, _) | (_, true) => {
             for res in results {
                 match res {
-                    Ok((offer, dur)) => println!("{offer:?} received in {dur:.3?}"),
+                    Ok(QuerySuccess {
+                        offer,
+                        server,
+                        time,
+                    }) => {
+                        println!("{offer:?} received from {server} in {time:.3?}")
+                    }
                     Err(e) => print_error(e),
                 }
             }
@@ -301,7 +317,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
                 results.iter().filter_map(|res| {
                     res.as_ref()
                         .ok()
-                        .and_then(|(_, dur)| dur.as_nanos().try_into().ok())
+                        .and_then(|QuerySuccess { time, .. }| time.as_nanos().try_into().ok())
                 })
             };
 

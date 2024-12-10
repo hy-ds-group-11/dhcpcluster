@@ -95,16 +95,23 @@ impl Server {
 
                         match result {
                             Ok(stream) => {
-                                match Peer::start_handshake(stream, &self.config, self.tx.clone()) {
-                                    Ok((peer, leases)) => {
-                                        self.peers.push(peer);
-                                        if self.dhcp_pool.leases.len() < leases.len() {
-                                            self.dhcp_pool.leases = leases;
+                                loop {
+                                    match Peer::start_handshake(
+                                        stream.try_clone().unwrap(),
+                                        &self.config,
+                                        self.tx.clone(),
+                                    ) {
+                                        Ok((peer, leases)) => {
+                                            self.peers.push(peer);
+                                            if self.dhcp_pool.leases.len() < leases.len() {
+                                                self.dhcp_pool.leases = leases;
+                                            }
+                                            break;
                                         }
+                                        Err(e) => console::warning!(
+                                            "Handshake with peer {peer_address} failed: {e}"
+                                        ),
                                     }
-                                    Err(e) => console::warning!(
-                                        "Handshake with peer {peer_address} failed: {e}"
-                                    ),
                                 }
                                 break; // Stop trying peer when connect has succeeded, regardless of handshake result
                             }

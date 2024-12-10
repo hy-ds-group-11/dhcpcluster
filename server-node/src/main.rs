@@ -30,9 +30,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
+    let mut server = Server::new(config.clone());
+    server.connect();
     let peer_listener = TcpListener::bind(config.address_private)?;
     let client_listener = TcpListener::bind(config.dhcp_address)?;
-    let server = Server::new(config);
     server.start(peer_listener, client_listener)?;
 
     Ok(())

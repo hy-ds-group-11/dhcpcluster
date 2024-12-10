@@ -141,8 +141,6 @@ impl Server {
             .spawn(move || Self::listen_nodes(peer_listener, peer_tx))
             .unwrap();
 
-        self.connect();
-
         let client_tx = self.tx.clone();
         let client_listener_thread = thread::Builder::new()
             .name(format!("{}::client_listener_thread", module_path!()))

@@ -20,7 +20,7 @@ use crate::{dhcp::DhcpService, peer::PeerId};
 #[derive(Deserialize, Debug)]
 struct ConfigFile {
     address_private: SocketAddr,
-    peers: Vec<SocketAddr>,
+    peers: Vec<String>,
     id: PeerId,
     heartbeat_timeout: u64,
     net: Ipv4Addr,
@@ -44,7 +44,7 @@ impl FromStr for ConfigFile {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub address_private: SocketAddr,
-    pub peers: Vec<SocketAddr>,
+    pub peers: Vec<String>,
     pub id: PeerId,
     pub heartbeat_timeout: Duration,
     pub prefix_length: u32,

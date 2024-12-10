@@ -12,3 +12,5 @@ target/
 # Custom rules
 *.profraw
 .vscode
+client/config.toml
+server-node/config.toml

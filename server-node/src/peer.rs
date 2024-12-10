@@ -66,7 +66,7 @@ impl Peer {
         let result = Message::send(&stream, &Message::Join(config.id));
         match result {
             Ok(_) => {
-                let message = Message::recv_timeout(&stream, config.heartbeat_timeout).unwrap();
+                let message = Message::recv_timeout(&stream, config.heartbeat_timeout)?;
 
                 match message {
                     Message::JoinAck(peer_id, leases) => {

@@ -24,29 +24,38 @@ impl From<[u8; 6]> for MacAddr {
 pub enum MacAddrParseError {
     #[error("Failed to parse octet {index} in MAC address")]
     ParseOctet { index: usize, source: ParseIntError },
-    #[error("Incorrect input length!")]
-    WrongInputLength,
+    #[error("MAC address too short, expected 6 octets, got {0}")]
+    Short(usize),
+    #[error("MAC address too long, expected 6 octets")]
+    Long,
 }
 
 impl FromStr for MacAddr {
     type Err = MacAddrParseError;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let mut bytes = Vec::with_capacity(6);
-        for (i, octet) in value.split(":").enumerate() {
-            bytes.push(u8::from_str_radix(octet, 16).map_err(|e| {
-                MacAddrParseError::ParseOctet {
-                    index: i,
-                    source: e,
+        let mut split = value.split(":");
+        for i in 0..6 {
+            match split.next() {
+                Some(octet) => {
+                    bytes.push(u8::from_str_radix(octet, 16).map_err(|e| {
+                        MacAddrParseError::ParseOctet {
+                            index: i,
+                            source: e,
+                        }
+                    })?);
                 }
-            })?);
+                None => return Err(MacAddrParseError::Short(i)),
+            }
         }
-        if bytes.len() == 6 {
-            Ok(Self([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
-            ]))
-        } else {
-            Err(MacAddrParseError::WrongInputLength)
+
+        if split.next().is_some() {
+            return Err(MacAddrParseError::Long);
         }
+
+        Ok(Self([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+        ]))
     }
 }
 

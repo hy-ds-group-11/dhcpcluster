@@ -4,10 +4,11 @@
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
-    io::Error,
     net::{Ipv4Addr, TcpStream},
+    str::FromStr,
     time::Duration,
 };
+use thiserror::Error;
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
 pub struct MacAddr([u8; 6]);
@@ -15,6 +16,30 @@ pub struct MacAddr([u8; 6]);
 impl From<[u8; 6]> for MacAddr {
     fn from(value: [u8; 6]) -> Self {
         Self(value)
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum MacAddrParseError {
+    #[error("Incorrect input length!")]
+    WrongInputLength,
+}
+
+impl FromStr for MacAddr {
+    type Err = MacAddrParseError;
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let bytes: Vec<u8> = value
+            .split(":")
+            .map(|hex| u8::from_str_radix(hex, 16))
+            .filter_map(|result| result.ok())
+            .collect();
+        if bytes.len() == 6 {
+            Ok(Self([
+                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
+            ]))
+        } else {
+            Err(MacAddrParseError::WrongInputLength)
+        }
     }
 }
 
@@ -57,8 +82,8 @@ pub enum DhcpServerMessage {
     Nack,
 }
 
-pub type CborRecvError = ciborium::de::Error<Error>;
-pub type CborSendError = ciborium::ser::Error<Error>;
+pub type CborRecvError = ciborium::de::Error<std::io::Error>;
+pub type CborSendError = ciborium::ser::Error<std::io::Error>;
 
 pub trait RecvCbor: Sized + for<'a> Deserialize<'a> {
     /// # Read a message from a [`TcpStream`].

@@ -6,3 +6,4 @@ edition = "2021"
 [dependencies]
 ciborium = "0.2.2"
 serde = { version = "1.0.215", features = ["derive"] }
+thiserror = "2.0.6"

@@ -10,7 +10,6 @@ use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbo
 use std::{
     any::Any,
     collections::HashMap,
-    error::Error,
     fmt::Display,
     net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{
@@ -83,14 +82,7 @@ pub struct Server {
 
 impl Server {
     /// Start listening to incoming connections from server peers and DHCP clients.
-    ///
-    /// This function may return, but only in error situations. Error handling is TBD and WIP.
-    /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
-    pub fn start(
-        config: Config,
-        peer_listener: TcpListener,
-        client_listener: TcpListener,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn start(config: Config, peer_listener: TcpListener, client_listener: TcpListener) {
         // Create main thread channel
         let (tx, server_rx) = channel::<ServerThreadMessage>();
         let dhcp_pool = config.dhcp_pool.clone();
@@ -125,6 +117,8 @@ impl Server {
 
         use ServerThreadMessage::*;
         loop {
+            console::render(server.start_time, &format!("{server}"));
+
             match server_rx.recv_timeout(server.config.heartbeat_timeout) {
                 Ok(IncomingPeerConnection(tcp_stream)) => server.answer_handshake(tcp_stream),
                 Ok(EstablishedPeerConnection(JoinSuccess {
@@ -166,14 +160,13 @@ impl Server {
             match server.last_connect_attempt {
                 ConnectAttempt::Never => server.attempt_connect(),
                 ConnectAttempt::Finished(at) => {
-                    if at.elapsed().unwrap() > server.config.heartbeat_timeout * 3 {
+                    if at.elapsed().unwrap_or(Duration::ZERO) > server.config.heartbeat_timeout * 3
+                    {
                         server.attempt_connect()
                     }
                 }
                 _ => {}
             };
-
-            console::render(server.start_time, &format!("{server}"));
         }
 
         peer_listener_thread.join_and_log_error();
@@ -181,13 +174,12 @@ impl Server {
         for peer in server.peers.into_values() {
             peer.disconnect();
         }
-        Ok(())
     }
 
     fn connect_peers(config: Arc<Config>, server_tx: Sender<ServerThreadMessage>) {
         let timeout = config.peer_connection_timeout;
         for name in config.peers.iter() {
-            console::log!("Connecting to {name}");
+            console::debug!("Connecting to {name}");
             match name.to_socket_addrs() {
                 Ok(addrs) => {
                     for addr in addrs {
@@ -220,7 +212,7 @@ impl Server {
                                 };
                             }
                             Err(e) => {
-                                console::warning!("Can't connect to peer {name}: {e}");
+                                console::warning!("Can't connect to peer {name}\n{e}");
                             }
                         }
                     }
@@ -497,8 +489,9 @@ impl Server {
         match message {
             Message::Join(peer_id) => {
                 if self.peers.contains_key(&peer_id) {
-                    // Let's be explicit that this reconnection is redundant and just close the stream early
-                    std::mem::drop(stream);
+                    // This reconnection is redundant, just close the stream early
+                    console::debug!("Already have {peer_id}, closing connection");
+                    return;
                 } else {
                     let result = Message::send(
                         &stream,

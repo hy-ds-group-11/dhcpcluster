@@ -67,11 +67,11 @@ enum ConnectAttempt {
 }
 
 /// The distributed DHCP server
-#[derive(Debug)]
 pub struct Server {
     pub start_time: SystemTime,
     config: Arc<Config>,
     tx: Sender<ServerThreadMessage>,
+    thread_pool: Arc<ThreadPool>,
     coordinator_id: Option<PeerId>,
     dhcp_pool: DhcpService,
     peers: HashMap<PeerId, Peer>,
@@ -86,10 +86,25 @@ impl Server {
         // Create main thread channel
         let (tx, server_rx) = channel::<ServerThreadMessage>();
         let dhcp_pool = config.dhcp_pool.clone();
+        let thread_count = config.thread_count;
         let mut server = Self {
             start_time: SystemTime::now(),
             config: Arc::new(config),
             tx,
+            thread_pool: Arc::new(ThreadPool::new(
+                thread_count,
+                Box::new(|worker_id: usize, msg: Box<dyn Any>| {
+                    console::error!("Worker {worker_id} panicked");
+                    // Try both &str and String, I don't know which type panic messages will occur in
+                    if let Some(msg) = msg
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or(msg.downcast_ref::<String>().cloned())
+                    {
+                        console::error!("{}", msg);
+                    }
+                }),
+            )),
             coordinator_id: None,
             dhcp_pool,
             peers: HashMap::new(),
@@ -97,6 +112,7 @@ impl Server {
             majority: false,
             last_connect_attempt: ConnectAttempt::Never,
         };
+        console::log!("Started with {} workers", thread_count);
 
         let peer_listener_thread = {
             let server_tx = server.tx.clone();
@@ -108,17 +124,30 @@ impl Server {
 
         let client_listener_thread = {
             let server_tx = server.tx.clone();
-            let thread_count = server.config.thread_count;
+            let thread_pool = Arc::clone(&server.thread_pool);
             thread::Builder::new()
                 .name(format!("{}::client_listener_thread", module_path!()))
-                .spawn(move || Self::listen_clients(client_listener, server_tx, thread_count))
+                .spawn(move || Self::listen_clients(client_listener, server_tx, thread_pool))
                 .unwrap()
         };
 
         use ServerThreadMessage::*;
         loop {
-            console::render(server.start_time, &format!("{server}"));
+            // Render pretty text representation if running in a terminal
+            if console::is_terminal() {
+                let start_time = server.start_time;
+                let state = format!("{server}");
+                // This may take considerable time running over ssh or such,
+                // we should perform the work elsewhere, but currently it's no use,
+                // because both the render call and the logging macros lock a mutex,
+                // thus the main thread will block regardless.
+                // TODO: refactor console to use a mpsc::channel instead of mutex.
+                //server.thread_pool.execute(move || {
+                console::render(start_time, &state);
+                //});
+            }
 
+            // Receive the next message from other threads (peer I/O, listeners, timers etc.)
             match server_rx.recv_timeout(server.config.heartbeat_timeout) {
                 Ok(IncomingPeerConnection(tcp_stream)) => server.answer_handshake(tcp_stream),
                 Ok(EstablishedPeerConnection(JoinSuccess {
@@ -244,8 +273,8 @@ impl Server {
 
         let server_tx = self.tx.clone();
         let config = Arc::clone(&self.config);
-        // TODO: use threadpool
-        thread::spawn(move || Self::connect_peers(config, server_tx));
+        self.thread_pool
+            .execute(move || Self::connect_peers(config, server_tx));
     }
 
     fn serve_client(stream: TcpStream, server_tx: Sender<ServerThreadMessage>) {
@@ -456,21 +485,8 @@ impl Server {
     fn listen_clients(
         listener: TcpListener,
         server_tx: Sender<ServerThreadMessage>,
-        thread_count: usize,
+        thread_pool: Arc<ThreadPool>,
     ) {
-        let panic_handler = |worker_id: usize, msg: Box<dyn Any>| {
-            console::error!("Worker {worker_id} panicked");
-            // Try both &str and String, I don't know which type panic messages will occur in
-            if let Some(msg) = msg
-                .downcast_ref::<&str>()
-                .map(|s| s.to_string())
-                .or(msg.downcast_ref::<String>().cloned())
-            {
-                console::error!("{}", msg);
-            }
-        };
-        let thread_pool = ThreadPool::new(thread_count, panic_handler);
-
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {

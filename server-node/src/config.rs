@@ -10,8 +10,10 @@ use std::{
     error::Error,
     ffi::OsStr,
     net::{Ipv4Addr, SocketAddr},
+    num::NonZero,
     path::Path,
     str::FromStr,
+    thread,
     time::Duration,
 };
 
@@ -29,7 +31,7 @@ struct ConfigFile {
     prefix_length: u32,
     lease_time: u64,
     dhcp_address: SocketAddr,
-    thread_count: usize,
+    thread_count: Option<usize>,
 }
 
 impl FromStr for ConfigFile {
@@ -53,7 +55,7 @@ pub struct Config {
     pub prefix_length: u32,
     pub dhcp_pool: DhcpService,
     pub dhcp_address: SocketAddr,
-    pub thread_count: usize,
+    pub thread_count: NonZero<usize>,
 }
 
 impl From<ConfigFile> for Config {
@@ -82,7 +84,12 @@ impl From<ConfigFile> for Config {
             prefix_length,
             dhcp_pool: DhcpService::from_cidr(net, prefix_length, Duration::from_secs(lease_time)),
             dhcp_address,
-            thread_count,
+            // Use thread count in config file if defined as > 0,
+            // otherwise use thread::available_parallelism(),
+            // and if all else fails, use a default of 8
+            thread_count: thread_count.and_then(NonZero::new).unwrap_or_else(|| {
+                thread::available_parallelism().unwrap_or(NonZero::new(8).unwrap())
+            }),
             // If None in ConfigFile, default to 10 seconds
             // If defined as Some(0), set None to Config
             peer_connection_timeout: peer_connection_timeout

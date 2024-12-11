@@ -68,16 +68,18 @@ impl Console {
 
 pub static CONSOLE: Mutex<Console> = const { Mutex::new(Console::new(1024)) };
 
+pub fn is_terminal() -> bool {
+    std::io::stdout().is_terminal()
+}
+
 pub fn render(start_time: SystemTime, state: &str) {
-    if std::io::stdout().is_terminal() {
-        let cons = CONSOLE.lock().unwrap();
-        cons.render(start_time, state);
-    }
+    let cons = CONSOLE.lock().unwrap();
+    cons.render(start_time, state);
     // Otherwise do nothing, because [`log_str`] already prints the event as is
 }
 
 pub fn log_str(event: &str, style: &str) {
-    if std::io::stdout().is_terminal() {
+    if is_terminal() {
         let mut cons = crate::console::CONSOLE.lock().unwrap();
         for line in event.split("\n") {
             // TODO: Encode messages to a struct with a style-enum and apply escape sequences in [`render`]

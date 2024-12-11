@@ -51,10 +51,11 @@ enum Command<'a> {
     Quit,
 }
 
-fn print_error(error: impl Error) {
+fn print_error(mut error: &dyn Error) {
     eprintln!("\x1b[93m{error}\x1b[0m");
-    if let Some(source) = error.source() {
-        eprintln!("\x1b[35m{source}\x1b[0m");
+    while let Some(source) = error.source() {
+        eprintln!("Caused by: \x1b[35m{source}\x1b[0m");
+        error = source;
     }
 }
 
@@ -391,7 +392,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
             for res in results {
                 match res {
                     Ok(success) => println!("{success}"),
-                    Err(e) => print_error(e),
+                    Err(e) => print_error(&e),
                 }
             }
         }
@@ -448,7 +449,7 @@ fn handle_renew_command(cmd: Renew, config: &Config) -> Result<(), QueryExecutio
 
     match res {
         Ok(success) => println!("{success}"),
-        Err(e) => print_error(e),
+        Err(e) => print_error(&e),
     }
 
     Ok(())
@@ -467,8 +468,8 @@ fn main() -> Result<(), ReadlineError> {
             match Config::load_toml_file(&joined_path) {
                 Ok(config) => config,
                 Err(e2) => {
-                    print_error(e1);
-                    print_error(e2);
+                    print_error(&e1);
+                    print_error(&e2);
                     exit(1);
                 }
             }
@@ -489,16 +490,16 @@ fn main() -> Result<(), ReadlineError> {
                     Ok(Nop) => {}
                     Ok(Quit) => break,
                     Ok(Query(query)) => {
-                        handle_query_command(query, &config).unwrap_or_else(print_error)
+                        handle_query_command(query, &config).unwrap_or_else(|e| print_error(&e))
                     }
                     Ok(Renew(renew)) => {
-                        handle_renew_command(renew, &config).unwrap_or_else(print_error)
+                        handle_renew_command(renew, &config).unwrap_or_else(|e| print_error(&e))
                     }
                     Ok(GenerateMac) => println!("{}", random_mac_addr()),
                     Ok(List) => list(&config),
                     Ok(Conf) => println!("\x1b[32m{config:#?}\x1b[0m"),
                     Ok(Help) => help(),
-                    Err(e) => print_error(e),
+                    Err(e) => print_error(&e),
                 }
             }
             Err(ReadlineError::Interrupted) => {

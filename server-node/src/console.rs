@@ -5,23 +5,27 @@
 use std::{
     collections::VecDeque,
     io::{IsTerminal, Write},
-    sync::Mutex,
+    sync::{
+        mpsc::{self, Sender},
+        LazyLock,
+    },
+    thread,
     time::SystemTime,
 };
 use terminal_size::{terminal_size, Height};
 
-pub struct Console {
+struct Console {
     history_len: usize,
     event_log: VecDeque<(SystemTime, String)>,
 }
 
 impl Console {
-    pub fn push_event(&mut self, description: String) {
+    fn push_event(&mut self, description: String) {
         self.event_log.truncate(self.history_len - 1);
         self.event_log.push_front((SystemTime::now(), description));
     }
 
-    const fn new(history_len: usize) -> Self {
+    fn new(history_len: usize) -> Self {
         Self {
             history_len,
             event_log: VecDeque::new(),
@@ -66,28 +70,52 @@ impl Console {
     }
 }
 
-pub static CONSOLE: Mutex<Console> = const { Mutex::new(Console::new(1024)) };
+enum ConsoleUpdate {
+    State(String),
+    Log(String),
+}
+
+static CONSOLE: LazyLock<Sender<ConsoleUpdate>> = LazyLock::new(|| {
+    let start_time = SystemTime::now();
+    let (tx, rx) = mpsc::channel();
+    thread::Builder::new()
+        .name(format!("{}::console_ui_thread", module_path!()))
+        .spawn(move || {
+            let mut console = Console::new(1024);
+            let mut state = String::new();
+            while let Ok(update) = rx.recv() {
+                match update {
+                    ConsoleUpdate::State(s) => state = s,
+                    ConsoleUpdate::Log(description) => console.push_event(description),
+                }
+                console.render(start_time, &state);
+            }
+        })
+        .unwrap();
+    tx
+});
 
 pub fn is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-pub fn render(start_time: SystemTime, state: &str) {
-    let cons = CONSOLE.lock().unwrap();
-    cons.render(start_time, state);
-    // Otherwise do nothing, because [`log_str`] already prints the event as is
-}
-
 pub fn log_str(event: &str, style: &str) {
     if is_terminal() {
-        let mut cons = crate::console::CONSOLE.lock().unwrap();
         for line in event.split("\n") {
             // TODO: Encode messages to a struct with a style-enum and apply escape sequences in [`render`]
-            cons.push_event(format!("\x1B{style}{line}\x1B[0m"));
+            CONSOLE
+                .send(ConsoleUpdate::Log(format!("\x1B{style}{line}\x1B[0m")))
+                .unwrap();
         }
     } else {
         // Don't write control characters, just output lines as is
         println!("{event}");
+    }
+}
+
+pub fn update_state(state: String) {
+    if is_terminal() {
+        CONSOLE.send(ConsoleUpdate::State(state)).unwrap();
     }
 }
 

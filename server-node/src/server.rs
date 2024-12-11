@@ -68,7 +68,6 @@ enum ConnectAttempt {
 
 /// The distributed DHCP server
 pub struct Server {
-    pub start_time: SystemTime,
     config: Arc<Config>,
     tx: Sender<ServerThreadMessage>,
     thread_pool: Arc<ThreadPool>,
@@ -87,8 +86,8 @@ impl Server {
         let (tx, server_rx) = channel::<ServerThreadMessage>();
         let dhcp_pool = config.dhcp_pool.clone();
         let thread_count = config.thread_count;
+        console::log!("Starting with {} workers", thread_count);
         let mut server = Self {
-            start_time: SystemTime::now(),
             config: Arc::new(config),
             tx,
             thread_pool: Arc::new(ThreadPool::new(
@@ -112,7 +111,6 @@ impl Server {
             majority: false,
             last_connect_attempt: ConnectAttempt::Never,
         };
-        console::log!("Started with {} workers", thread_count);
 
         let peer_listener_thread = {
             let server_tx = server.tx.clone();
@@ -134,18 +132,7 @@ impl Server {
         use ServerThreadMessage::*;
         loop {
             // Render pretty text representation if running in a terminal
-            if console::is_terminal() {
-                let start_time = server.start_time;
-                let state = format!("{server}");
-                // This may take considerable time running over ssh or such,
-                // we should perform the work elsewhere, but currently it's no use,
-                // because both the render call and the logging macros lock a mutex,
-                // thus the main thread will block regardless.
-                // TODO: refactor console to use a mpsc::channel instead of mutex.
-                //server.thread_pool.execute(move || {
-                console::render(start_time, &state);
-                //});
-            }
+            console::update_state(format!("{server}"));
 
             // Receive the next message from other threads (peer I/O, listeners, timers etc.)
             match server_rx.recv_timeout(server.config.heartbeat_timeout) {

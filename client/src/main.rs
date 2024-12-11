@@ -64,13 +64,13 @@ fn help() {
 Supported commands:
     \x1b[32mquery\x1b[0m [\x1b[36mOPTION\x1b[0m]... [\x1b[36mSERVER\x1b[0m]
         \x1b[36mOPTION\x1b[0m:
-            -n N    number of batch queries (default: 1)
-            -r      renew
-            -v      print all responses even when batch querying
+            -n <N>           number of batch queries (default: 1)
+            -v               print all responses even when batch querying
+            -m <MAC_ADDRESS> specify MAC-address (otherwise randomized)
         \x1b[36mSERVER\x1b[0m: 
-            random  pick randomly from configured servers (default)
-            <index> index number of server to connect to (see list)
-            <host>  arbitrary host, e.g. dhcp.example.com:4321
+            random           pick randomly from configured servers (default)
+            <index>          index number of server to connect to (see list)
+            <host>           arbitrary host, e.g. dhcp.example.com:4321
     \x1b[32mrenew\x1b[0m <\x1b[36mMAC_ADDRESS\x1b[0m> <\x1b[36mIP_ADDRESS\x1b[0m> [\x1b[36mSERVER\x1b[0m]
         Renew an existing lease with MAC_ADDRESS and IP_ADDRESS from SERVER
     \x1b[32mgenerate\x1b[0m
@@ -376,11 +376,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
 
     for _ in 0..cmd.batch {
         let server = server.unwrap_or_else(|| random_server(config));
-        let mac_address = if let Some(mac_address) = cmd.mac_address {
-            mac_address
-        } else {
-            random_mac_addr()
-        };
+        let mac_address = cmd.mac_address.unwrap_or_else(random_mac_addr);
 
         let res = query(server, config.default_port, config.timeout, mac_address);
         results.push(res);

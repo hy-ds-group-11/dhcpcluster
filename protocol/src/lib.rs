@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
     net::{Ipv4Addr, TcpStream},
+    num::ParseIntError,
     str::FromStr,
     time::Duration,
 };
@@ -21,6 +22,8 @@ impl From<[u8; 6]> for MacAddr {
 
 #[derive(Error, Debug)]
 pub enum MacAddrParseError {
+    #[error("Failed to parse octet {index} in MAC address")]
+    ParseOctet { index: usize, source: ParseIntError },
     #[error("Incorrect input length!")]
     WrongInputLength,
 }
@@ -28,11 +31,15 @@ pub enum MacAddrParseError {
 impl FromStr for MacAddr {
     type Err = MacAddrParseError;
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let bytes: Vec<u8> = value
-            .split(":")
-            .map(|hex| u8::from_str_radix(hex, 16))
-            .filter_map(|result| result.ok())
-            .collect();
+        let mut bytes = Vec::with_capacity(6);
+        for (i, octet) in value.split(":").enumerate() {
+            bytes.push(u8::from_str_radix(octet, 16).map_err(|e| {
+                MacAddrParseError::ParseOctet {
+                    index: i,
+                    source: e,
+                }
+            })?);
+        }
         if bytes.len() == 6 {
             Ok(Self([
                 bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],

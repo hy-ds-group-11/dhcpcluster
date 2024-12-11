@@ -309,6 +309,7 @@ dependencies = [
  "protocol",
  "serde",
  "terminal_size",
+ "thread-pool",
  "toml",
 ]
 
@@ -352,6 +353,10 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "thread-pool"
+version = "1.0.0"
 
 [[package]]
 name = "toml"

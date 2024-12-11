@@ -1,18 +1,19 @@
-use crate::{console, ThreadJoin};
 use std::{
+    any::Any,
     sync::{mpsc, Arc, Mutex},
     thread,
 };
 
 #[derive(Debug)]
-pub struct ThreadPool {
+pub struct ThreadPool<E: Fn(usize, Box<dyn Any>)> {
+    panic_handler: E,
     workers: Vec<Worker>,
     sender: Option<mpsc::Sender<Job>>,
 }
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
-impl ThreadPool {
+impl<E: Fn(usize, Box<dyn Any>)> ThreadPool<E> {
     /// Create a new ThreadPool.
     ///
     /// The size is the number of threads in the pool.
@@ -20,7 +21,7 @@ impl ThreadPool {
     /// # Panics
     ///
     /// The `new` function will panic if the size is zero.
-    pub fn new(size: usize) -> ThreadPool {
+    pub fn new(size: usize, panic_handler: E) -> ThreadPool<E> {
         assert!(size > 0);
 
         let (sender, receiver) = mpsc::channel();
@@ -34,6 +35,7 @@ impl ThreadPool {
         }
 
         ThreadPool {
+            panic_handler,
             workers,
             sender: Some(sender),
         }
@@ -49,16 +51,14 @@ impl ThreadPool {
     }
 }
 
-impl Drop for ThreadPool {
+impl<E: Fn(usize, Box<dyn Any>)> Drop for ThreadPool<E> {
     fn drop(&mut self) {
         drop(self.sender.take());
 
         for worker in &mut self.workers {
-            console::debug!("Shutting down worker {}", worker.id);
-
             if let Some(thread) = worker.thread.take() {
-                if let Err(msg) = thread.join_and_format_error() {
-                    console::error!("{msg}");
+                if let Err(message) = thread.join() {
+                    (self.panic_handler)(worker.id, message);
                 }
             }
         }
@@ -80,12 +80,9 @@ impl Worker {
 
                 match message {
                     Ok(job) => {
-                        console::debug!("Worker {id} got a job; executing.");
-
                         job();
                     }
                     Err(_) => {
-                        console::debug!("Worker {id} disconnected; shutting down.");
                         break;
                     }
                 }

@@ -4,11 +4,11 @@ use crate::{
     dhcp::{DhcpService, Lease},
     message::Message,
     peer::{Peer, PeerId},
-    thread_pool::ThreadPool,
     ThreadJoin,
 };
 use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbor, SendCbor};
 use std::{
+    any::Any,
     error::Error,
     fmt::Display,
     net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
@@ -16,6 +16,7 @@ use std::{
     thread,
     time::{Duration, SystemTime},
 };
+use thread_pool::ThreadPool;
 
 #[derive(Debug)]
 pub struct LeaseOffer {
@@ -396,7 +397,19 @@ impl Server {
         server_tx: Sender<ServerThreadMessage>,
         thread_count: usize,
     ) {
-        let thread_pool = ThreadPool::new(thread_count);
+        let panic_handler = |worker_id: usize, msg: Box<dyn Any>| {
+            console::error!("Worker {worker_id} panicked");
+            // Try both &str and String, I don't know which type panic messages will occur in
+            if let Some(msg) = msg
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or(msg.downcast_ref::<String>().cloned())
+            {
+                console::error!("{}", msg);
+            }
+        };
+        let thread_pool = ThreadPool::new(thread_count, panic_handler);
+
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {

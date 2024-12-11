@@ -20,7 +20,6 @@ pub mod dhcp;
 pub mod message;
 pub mod peer;
 pub mod server;
-pub mod thread_pool;
 
 pub trait ThreadJoin: Sized {
     fn join(self) -> thread::Result<()>;

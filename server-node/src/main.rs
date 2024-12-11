@@ -30,16 +30,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     };
 
-    let addr_peers = config.address_private;
-    let addr_clients = config.dhcp_address;
-
-    // Connect to as many peers as possible first
-    let server = Server::connect(config);
-
-    // Then start listening
-    let peer_listener = TcpListener::bind(addr_peers)?;
-    let client_listener = TcpListener::bind(addr_clients)?;
-    server.start(peer_listener, client_listener)?;
+    // Start listening
+    let peer_listener = TcpListener::bind(config.address_private)?;
+    let client_listener = TcpListener::bind(config.dhcp_address)?;
+    Server::start(config, peer_listener, client_listener)?;
 
     Ok(())
 }

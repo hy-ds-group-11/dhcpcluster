@@ -3,13 +3,33 @@ use crate::{
 };
 use protocol::{RecvCbor, SendCbor};
 use std::{
-    error::Error,
     fmt::Display,
     net::TcpStream,
-    sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum HandshakeError {
+    #[error("Failed to receive reply during handshake")]
+    Recv(#[from] protocol::CborRecvError),
+    #[error("Failed to send Join during handshake")]
+    SendJoin(#[from] protocol::CborSendError),
+    #[error("Peer responded with {0:?} when expecting JoinAck")]
+    NoJoinAck(Message),
+}
+
+#[derive(Debug)]
+pub struct JoinSuccess {
+    pub peer_id: PeerId,
+    pub peer: Peer,
+    pub leases: Vec<Lease>,
+}
 
 enum SenderThreadMessage {
     Terminate,
@@ -21,7 +41,7 @@ pub type PeerId = u32;
 /// Peer connection
 #[derive(Debug)]
 pub struct Peer {
-    pub id: PeerId,
+    id: PeerId,
     tx: Sender<SenderThreadMessage>,
     read_thread: JoinHandle<()>,
     write_thread: JoinHandle<()>,
@@ -60,26 +80,20 @@ impl Peer {
 
     pub fn start_handshake(
         stream: TcpStream,
-        config: &Config,
+        config: Arc<Config>,
         server_tx: Sender<ServerThreadMessage>,
-    ) -> Result<(Peer, Vec<Lease>), Box<dyn Error>> {
-        let result = Message::send(&stream, &Message::Join(config.id));
-        match result {
-            Ok(_) => {
-                let message = Message::recv_timeout(&stream, config.heartbeat_timeout)?;
-
-                match message {
-                    Message::JoinAck(peer_id, leases) => {
-                        console::log!("Connected to peer {peer_id}");
-                        Ok((
-                            Peer::new(stream, peer_id, server_tx, config.heartbeat_timeout),
-                            leases,
-                        ))
-                    }
-                    _ => panic!("Peer responded to Join with something other than JoinAck"),
-                }
+    ) -> Result<JoinSuccess, HandshakeError> {
+        Message::send(&stream, &Message::Join(config.id))?;
+        match Message::recv_timeout(&stream, config.heartbeat_timeout)? {
+            Message::JoinAck(peer_id, leases) => {
+                console::log!("Connected to peer {peer_id}");
+                Ok(JoinSuccess {
+                    peer_id,
+                    peer: Self::new(stream, peer_id, server_tx, config.heartbeat_timeout),
+                    leases,
+                })
             }
-            Err(e) => Err(format!("Handshake failed! {e:?}").into()),
+            message => Err(HandshakeError::NoJoinAck(message)),
         }
     }
 
@@ -89,12 +103,12 @@ impl Peer {
             .unwrap_or_else(|e| console::warning!("{e:?}"));
     }
 
-    pub fn join(self) -> Result<(), String> {
+    pub fn disconnect(self) {
+        std::mem::drop(self.tx);
         // TODO implement ^C events? Dropping the channel tx should be enough
         // to stop the threads, as seen in thread_pool
-        self.read_thread.join_and_format_error()?;
-        self.write_thread.join_and_format_error()?;
-        Ok(())
+        self.read_thread.join_and_log_error();
+        self.write_thread.join_and_log_error();
     }
 
     fn read_thread_fn(
@@ -139,18 +153,19 @@ impl Peer {
     fn write_thread_fn(stream: TcpStream, rx: Receiver<SenderThreadMessage>, timeout: Duration) {
         use SenderThreadMessage::*;
         loop {
-            let receive = rx.recv_timeout(timeout);
-
-            if receive.is_err() {
-                Message::send(&stream, &Message::Heartbeat).unwrap();
-                continue;
-            }
-
-            match receive.unwrap() {
-                Relay(message) => {
-                    Message::send(&stream, &message).unwrap_or_else(|e| console::log!("{e:?}"));
+            match rx.recv_timeout(timeout) {
+                Ok(message) => match message {
+                    Terminate => break,
+                    Relay(message) => {
+                        Message::send(&stream, &message).unwrap_or_else(|e| console::log!("{e:?}"));
+                    }
+                },
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    Message::send(&stream, &Message::Heartbeat).unwrap();
                 }
-                Terminate => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    break;
+                }
             }
         }
     }

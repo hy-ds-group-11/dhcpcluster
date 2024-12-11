@@ -3,16 +3,20 @@ use crate::{
     console,
     dhcp::{DhcpService, Lease},
     message::Message,
-    peer::{Peer, PeerId},
+    peer::{HandshakeError, JoinSuccess, Peer, PeerId},
     ThreadJoin,
 };
 use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbor, SendCbor};
 use std::{
     any::Any,
+    collections::HashMap,
     error::Error,
     fmt::Display,
     net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
-    sync::mpsc::{channel, Receiver, Sender},
+    sync::{
+        mpsc::{channel, Sender},
+        Arc,
+    },
     thread,
     time::{Duration, SystemTime},
 };
@@ -28,7 +32,9 @@ type LeaseConfirmation = bool;
 
 #[derive(Debug)]
 pub enum ServerThreadMessage {
-    NewConnection(TcpStream),
+    IncomingPeerConnection(TcpStream),
+    EstablishedPeerConnection(JoinSuccess),
+    ConnectAttemptFinished,
     PeerLost(PeerId),
     ElectionTimeout,
     ProtocolMessage {
@@ -53,41 +59,139 @@ enum ServerRole {
     Follower,
 }
 
+// Don't spam (re)connection, keep track of last attempt time
+#[derive(Debug)]
+enum ConnectAttempt {
+    Never,
+    Running,
+    Finished(SystemTime),
+}
+
 /// The distributed DHCP server
 #[derive(Debug)]
 pub struct Server {
     pub start_time: SystemTime,
-    config: Config,
-    rx: Option<Receiver<ServerThreadMessage>>,
+    config: Arc<Config>,
     tx: Sender<ServerThreadMessage>,
     coordinator_id: Option<PeerId>,
     dhcp_pool: DhcpService,
-    peers: Vec<Peer>,
+    peers: HashMap<PeerId, Peer>,
     local_role: ServerRole,
     majority: bool,
+    last_connect_attempt: ConnectAttempt,
 }
 
 impl Server {
-    /// Initialize shared state, and try connecting to peers.
-    /// Failed handshakes are ignored, since they might be nodes that are starting later.
-    /// After connecting to peers, you probably want to call [`Server::start`].
-    pub fn connect(config: Config) -> Self {
-        let start_time = SystemTime::now();
-        let coordinator_id = None;
-        let mut dhcp_pool = config.dhcp_pool.clone();
-        let mut peers = Vec::new();
-        let local_role = ServerRole::Follower;
+    /// Start listening to incoming connections from server peers and DHCP clients.
+    ///
+    /// This function may return, but only in error situations. Error handling is TBD and WIP.
+    /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
+    pub fn start(
+        config: Config,
+        peer_listener: TcpListener,
+        client_listener: TcpListener,
+    ) -> Result<(), Box<dyn Error>> {
+        // Create main thread channel
+        let (tx, server_rx) = channel::<ServerThreadMessage>();
+        let dhcp_pool = config.dhcp_pool.clone();
+        let mut server = Self {
+            start_time: SystemTime::now(),
+            config: Arc::new(config),
+            tx,
+            coordinator_id: None,
+            dhcp_pool,
+            peers: HashMap::new(),
+            local_role: ServerRole::Follower,
+            majority: false,
+            last_connect_attempt: ConnectAttempt::Never,
+        };
 
-        let (tx, rx) = channel::<ServerThreadMessage>();
+        let peer_listener_thread = {
+            let server_tx = server.tx.clone();
+            thread::Builder::new()
+                .name(format!("{}::peer_listener_thread", module_path!()))
+                .spawn(move || Server::listen_nodes(peer_listener, server_tx))
+                .unwrap()
+        };
 
-        for peer_address in &config.peers {
-            match peer_address.to_socket_addrs() {
+        let client_listener_thread = {
+            let server_tx = server.tx.clone();
+            let thread_count = server.config.thread_count;
+            thread::Builder::new()
+                .name(format!("{}::client_listener_thread", module_path!()))
+                .spawn(move || Self::listen_clients(client_listener, server_tx, thread_count))
+                .unwrap()
+        };
+
+        use ServerThreadMessage::*;
+        loop {
+            match server_rx.recv_timeout(server.config.heartbeat_timeout) {
+                Ok(IncomingPeerConnection(tcp_stream)) => server.answer_handshake(tcp_stream),
+                Ok(EstablishedPeerConnection(JoinSuccess {
+                    peer_id,
+                    peer,
+                    leases,
+                })) => {
+                    if let Ok(()) = server.add_peer(peer_id, peer) {
+                        if server.dhcp_pool.leases.len() < leases.len() {
+                            console::debug!("Updating leases");
+                            server.dhcp_pool.leases = leases;
+                        }
+                        // Need to initiate election, cluster changed
+                        server.start_election();
+                    }
+                }
+                Ok(ConnectAttemptFinished) => {
+                    server.last_connect_attempt = ConnectAttempt::Finished(SystemTime::now());
+                    console::debug!("Connection attempt finished");
+                }
+                Ok(PeerLost(peer_id)) => server.remove_peer(peer_id),
+                Ok(ElectionTimeout) => server.finish_election(),
+                Ok(ProtocolMessage { sender_id, message }) => {
+                    server.handle_protocol_message(sender_id, message)
+                }
+                Ok(LeaseRequest { mac_address, tx }) => server.handle_offer_lease(mac_address, tx),
+                Ok(ConfirmRequest {
+                    mac_address,
+                    ip,
+                    tx,
+                }) => server.handle_confirm_lease(mac_address, ip, tx),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => { /* ignore */ }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    break;
+                }
+            };
+
+            // Periodically check if server needs to connect to peers
+            match server.last_connect_attempt {
+                ConnectAttempt::Never => server.attempt_connect(),
+                ConnectAttempt::Finished(at) => {
+                    if at.elapsed().unwrap() > server.config.heartbeat_timeout * 3 {
+                        server.attempt_connect()
+                    }
+                }
+                _ => {}
+            };
+
+            console::render(server.start_time, &format!("{server}"));
+        }
+
+        peer_listener_thread.join_and_log_error();
+        client_listener_thread.join_and_log_error();
+        for peer in server.peers.into_values() {
+            peer.disconnect();
+        }
+        Ok(())
+    }
+
+    fn connect_peers(config: Arc<Config>, server_tx: Sender<ServerThreadMessage>) {
+        let timeout = config.peer_connection_timeout;
+        for name in config.peers.iter() {
+            console::log!("Connecting to {name}");
+            match name.to_socket_addrs() {
                 Ok(addrs) => {
                     for addr in addrs {
-                        console::log!("Connecting to {peer_address}");
-                        console::render(start_time, "");
-
-                        let result = if let Some(timeout) = config.peer_connection_timeout {
+                        let result = if let Some(timeout) = timeout {
                             TcpStream::connect_timeout(&addr, timeout)
                         } else {
                             TcpStream::connect(addr)
@@ -95,99 +199,61 @@ impl Server {
 
                         match result {
                             Ok(stream) => {
-                                match Peer::start_handshake(stream, &config, tx.clone()) {
-                                    Ok((peer, leases)) => {
-                                        peers.push(peer);
-                                        if dhcp_pool.leases.len() < leases.len() {
-                                            dhcp_pool.leases = leases;
-                                        }
+                                match Peer::start_handshake(
+                                    stream,
+                                    Arc::clone(&config),
+                                    server_tx.clone(),
+                                ) {
+                                    Ok(success) => server_tx
+                                        .send(ServerThreadMessage::EstablishedPeerConnection(
+                                            success,
+                                        ))
+                                        .unwrap(),
+                                    Err(
+                                        e @ (HandshakeError::Recv(_) | HandshakeError::SendJoin(_)),
+                                    ) => {
+                                        console::debug!("Handshake failed: {e}")
                                     }
-                                    Err(e) => console::warning!(
-                                        "Handshake with peer {peer_address} failed: {e}"
-                                    ),
-                                }
-                                break; // Stop trying peer when connect has succeeded, regardless of handshake result
+                                    Err(e @ HandshakeError::NoJoinAck(_)) => {
+                                        console::error!("Unexpected hanshake error: {e}")
+                                    }
+                                };
                             }
                             Err(e) => {
-                                console::warning!("Can't connect to peer {peer_address}: {e}")
+                                console::warning!("Can't connect to peer {name}: {e}");
                             }
                         }
                     }
                 }
-                Err(e) => console::warning!("Name resolution failed for {peer_address}: {e}"),
+                Err(e) => console::error!("Name resolution failed for {name}: {e}"),
             }
         }
-
-        Self {
-            config,
-            rx: Some(rx),
-            tx,
-            coordinator_id,
-            dhcp_pool,
-            peers,
-            local_role,
-            start_time,
-            majority: false,
-        }
+        server_tx
+            .send(ServerThreadMessage::ConnectAttemptFinished)
+            .unwrap();
     }
 
-    /// Start listening to incoming connections from server peers and DHCP clients.
-    ///
-    /// This function may return, but only in error situations. Error handling is TBD and WIP.
-    /// Otherwise consider it as a blocking operation that loops and never returns control back to the caller.
-    pub fn start(
-        mut self,
-        peer_listener: TcpListener,
-        client_listener: TcpListener,
-    ) -> Result<(), Box<dyn Error>> {
-        let peer_tx = self.tx.clone();
-        let peer_listener_thread = thread::Builder::new()
-            .name(format!("{}::peer_listener_thread", module_path!()))
-            .spawn(move || Self::listen_nodes(peer_listener, peer_tx))
-            .unwrap();
+    fn attempt_connect(&mut self) {
+        self.last_connect_attempt = ConnectAttempt::Running;
+        console::debug!("Connection attempt started");
 
-        let client_tx = self.tx.clone();
-        let client_listener_thread = thread::Builder::new()
-            .name(format!("{}::client_listener_thread", module_path!()))
-            .spawn(move || {
-                Self::listen_clients(client_listener, client_tx, self.config.thread_count)
-            })
-            .unwrap();
-
-        // Always start election when joining
-        self.start_election();
-
-        // Prevent program seemingly hanging when waiting for first message
-        console::render(self.start_time, &format!("{self}"));
-
-        let rx = self.rx.take().unwrap();
-        use ServerThreadMessage::*;
-        for message in rx.iter() {
-            match message {
-                NewConnection(tcp_stream) => self.answer_handshake(tcp_stream),
-                PeerLost(peer_id) => self.remove_peer(peer_id),
-                ElectionTimeout => self.finish_election(),
-                ProtocolMessage { sender_id, message } => {
-                    self.handle_protocol_message(sender_id, message)
-                }
-                LeaseRequest { mac_address, tx } => self.handle_offer_lease(mac_address, tx),
-                ConfirmRequest {
-                    mac_address,
-                    ip,
-                    tx,
-                } => self.handle_confirm_lease(mac_address, ip, tx),
-            }
-            console::render(self.start_time, &format!("{self}"));
+        // For now this is the only check stopping us from spamming
+        // connection attempts to peers with whom we're already connected.
+        // TODO: If we want to KNOW which peers exactly are disconnected,
+        // we need to encode peer IDs along with the names/addresses in Config,
+        // and modify the Server::connect_peers function to reason about
+        // which peers are offline and which aren't.
+        if self.peers.len() == self.config.peers.len() {
+            self.tx
+                .send(ServerThreadMessage::ConnectAttemptFinished)
+                .unwrap();
+            return;
         }
 
-        peer_listener_thread.join_and_format_error()?;
-        client_listener_thread.join_and_format_error()?;
-        for peer in self.peers {
-            if let Err(msg) = peer.join() {
-                console::error!("{msg}");
-            }
-        }
-        Ok(())
+        let server_tx = self.tx.clone();
+        let config = Arc::clone(&self.config);
+        // TODO: use threadpool
+        thread::spawn(move || Self::connect_peers(config, server_tx));
     }
 
     fn serve_client(stream: TcpStream, server_tx: Sender<ServerThreadMessage>) {
@@ -305,7 +371,10 @@ impl Server {
         console::log!("Peer {sender_id} invited {message:?}");
         if sender_id < self.config.id {
             console::log!("Received Election from lower id");
-            self.peer(sender_id).unwrap().send_message(Message::Okay);
+            self.peers
+                .get(&sender_id)
+                .unwrap()
+                .send_message(Message::Okay);
             self.start_election();
         }
     }
@@ -370,7 +439,7 @@ impl Server {
         match self.dhcp_pool.commit_lease(mac_address, ip) {
             Ok(lease) => {
                 tx.send(true).unwrap();
-                for peer in &self.peers {
+                for peer in self.peers.values() {
                     peer.send_message(Message::Lease(lease.clone()));
                 }
             }
@@ -385,7 +454,7 @@ impl Server {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => server_tx
-                    .send(ServerThreadMessage::NewConnection(stream))
+                    .send(ServerThreadMessage::IncomingPeerConnection(stream))
                     .unwrap(),
                 Err(e) => console::warning!("{e:?}"),
             }
@@ -422,28 +491,38 @@ impl Server {
     }
 
     fn answer_handshake(&mut self, stream: TcpStream) {
+        // TODO: security: we should have a mechanism to authenticate peer, perhaps TLS
         let message = Message::recv_timeout(&stream, self.config.heartbeat_timeout).unwrap();
 
         match message {
             Message::Join(peer_id) => {
-                let result = Message::send(
-                    &stream,
-                    &Message::JoinAck(self.config.id, self.dhcp_pool.leases.clone()),
-                );
-                match result {
-                    Ok(_) => {
-                        console::log!("Peer {peer_id} joined");
-                        self.peers.push(Peer::new(
-                            stream,
-                            peer_id,
-                            self.tx.clone(),
-                            self.config.heartbeat_timeout,
-                        ));
+                if self.peers.contains_key(&peer_id) {
+                    // Let's be explicit that this reconnection is redundant and just close the stream early
+                    std::mem::drop(stream);
+                } else {
+                    let result = Message::send(
+                        &stream,
+                        &Message::JoinAck(self.config.id, self.dhcp_pool.leases.clone()),
+                    );
+                    match result {
+                        Ok(_) => {
+                            console::log!("Peer {peer_id} joined");
+
+                            self.add_peer(
+                                peer_id,
+                                Peer::new(
+                                    stream,
+                                    peer_id,
+                                    self.tx.clone(),
+                                    self.config.heartbeat_timeout,
+                                ),
+                            ).expect("Invariant violated: Server::add_peer() failed when we don't have a stored connection");
+                        }
+                        Err(e) => console::warning!("{e:?}"),
                     }
-                    Err(e) => console::warning!("{e:?}"),
                 }
             }
-            _ => panic!("First message of peer wasn't Join"),
+            _ => console::error!("First message from peer wasn't Join"),
         }
 
         // New peer joined, we want to inform it of the coordinator and reallocate the DHCP pool
@@ -452,8 +531,25 @@ impl Server {
         }
     }
 
+    fn add_peer(&mut self, peer_id: PeerId, peer: Peer) -> Result<(), ()> {
+        // This should prevent us from having simultaneous connections open
+        if self.peers.contains_key(&peer_id) {
+            console::debug!("Tried to add peer {peer_id}, but already had a connection");
+            peer.disconnect(); // TODO: This might leave the read thread hanging
+            console::debug!("peer.join() returned, stream should be closed now");
+            return Err(());
+        }
+        if let Some(peer) = self.peers.insert(peer_id, peer) {
+            console::debug!("Already had {peer_id}, dropping previous connection");
+            peer.disconnect(); // TODO: This might leave the read thread hanging
+            console::debug!("peer.join() returned, stream should be closed now");
+        }
+        console::debug!("Added peer {peer_id}");
+        Ok(())
+    }
+
     fn remove_peer(&mut self, peer_id: PeerId) {
-        self.peers.retain(|peer| peer.id != peer_id);
+        self.peers.remove(&peer_id);
 
         // Peer left, we want to confirm the coordinator and reallocate the DHCP pool
         if self.local_role == ServerRole::Coordinator {
@@ -465,10 +561,6 @@ impl Server {
         }
     }
 
-    fn peer(&self, peer_id: PeerId) -> Option<&Peer> {
-        self.peers.iter().find(|peer| peer.id == peer_id)
-    }
-
     /// Send [`Message::Election`] to all server peers with higher ids than this server.
     ///
     /// This function starts a timer thread which sleeps until the bully algorithm timeout expires.
@@ -478,14 +570,14 @@ impl Server {
 
         self.local_role = WaitingForElection;
 
-        for peer in &self.peers {
-            if peer.id > self.config.id {
+        for (peer_id, peer) in &self.peers {
+            if *peer_id > self.config.id {
                 peer.send_message(Message::Election);
             }
         }
 
         let dur = self.config.heartbeat_timeout;
-        let tx = self.tx.clone();
+        let server_tx = self.tx.clone();
         thread::Builder::new()
             .name(format!("{}::election_timer_thread", module_path!()))
             .spawn(move || {
@@ -493,7 +585,9 @@ impl Server {
                 console::log!("Starting election wait");
                 thread::sleep(dur);
                 console::log!("Election wait over");
-                tx.send(ServerThreadMessage::ElectionTimeout).unwrap();
+                server_tx
+                    .send(ServerThreadMessage::ElectionTimeout)
+                    .unwrap();
             })
             .unwrap(); // Drop JoinHandle, detaching election thread from server thread
     }
@@ -521,7 +615,7 @@ impl Server {
         let majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
         self.handle_majority(majority);
 
-        for peer in &self.peers {
+        for peer in self.peers.values() {
             peer.send_message(Message::Coordinator);
             peer.send_message(Message::SetMajority(self.majority));
         }
@@ -540,7 +634,7 @@ impl Server {
                 .clone(),
         );
 
-        for (pool, peer) in pools_iter.zip(self.peers.iter()) {
+        for (pool, peer) in pools_iter.zip(self.peers.values()) {
             peer.send_message(Message::SetPool(pool.clone()));
         }
     }
@@ -570,7 +664,7 @@ impl Display for Server {
         write_label(f, "Active peers")?;
         write!(f, "[ ")?;
 
-        let mut ids = self.peers.iter().map(|item| item.id).collect::<Vec<_>>();
+        let mut ids = self.peers.keys().cloned().collect::<Vec<u32>>();
         ids.push(self.config.id);
         ids.sort();
         for (i, id) in ids.iter().enumerate() {

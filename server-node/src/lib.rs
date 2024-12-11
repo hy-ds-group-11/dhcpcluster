@@ -24,17 +24,20 @@ pub mod server;
 pub trait ThreadJoin: Sized {
     fn join(self) -> thread::Result<()>;
 
-    fn thread(&self) -> &thread::Thread;
+    fn name(&self) -> String;
 
-    fn join_and_format_error(self) -> Result<(), String> {
-        let name = self.thread().name().unwrap_or("").to_string();
-        self.join().map_err(|e| -> String {
-            format!(
-                "Thread {} panicked, Err: {:?}",
-                name,
-                e.downcast_ref::<&str>()
-            )
-        })
+    fn join_and_log_error(self) {
+        let name = self.name();
+        if let Err(msg) = self.join() {
+            console::error!("Thread {name} panicked");
+            if let Some(msg) = msg
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or(msg.downcast_ref::<String>().cloned())
+            {
+                console::error!("{}", msg);
+            }
+        }
     }
 }
 
@@ -43,7 +46,7 @@ impl ThreadJoin for JoinHandle<()> {
         self.join()
     }
 
-    fn thread(&self) -> &thread::Thread {
-        self.thread()
+    fn name(&self) -> String {
+        self.thread().name().unwrap_or("<noname>").to_string()
     }
 }

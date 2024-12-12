@@ -209,7 +209,7 @@ enum QueryError<'a> {
     #[error("Name resolution failed for {server}")]
     NameResolution { server: &'a str, source: io::Error },
     #[error("Failed to set socket timeout")]
-    SetSocketTimeout { source: io::Error },
+    SetSocketTimeout(#[source] io::Error),
     #[error("Failed to establish a connection to {server}")]
     Connect { server: &'a str, source: io::Error },
     #[error("The server name {server} resolved to 0 addresses, can't reach server")]
@@ -238,10 +238,10 @@ fn connect_timeout<'a>(
     .map_err(|e| QueryError::Connect { server, source: e })?;
     stream
         .set_read_timeout(timeout)
-        .map_err(|e| QueryError::SetSocketTimeout { source: e })?;
+        .map_err(QueryError::SetSocketTimeout)?;
     stream
         .set_write_timeout(timeout)
-        .map_err(|e| QueryError::SetSocketTimeout { source: e })?;
+        .map_err(QueryError::SetSocketTimeout)?;
     Ok(stream)
 }
 

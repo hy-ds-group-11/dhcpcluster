@@ -1,7 +1,11 @@
 use std::{
     any::Any,
+    io,
     num::NonZero,
-    sync::{mpsc, Arc, Mutex},
+    sync::{
+        mpsc::{self, RecvError, SendError},
+        Arc, Mutex, PoisonError,
+    },
     thread,
 };
 
@@ -19,7 +23,7 @@ impl ThreadPool {
     /// Create a new ThreadPool.
     ///
     /// The size is the number of threads in the pool.
-    pub fn new(size: NonZero<usize>, panic_handler: PanicHandler) -> ThreadPool {
+    pub fn new(size: NonZero<usize>, panic_handler: PanicHandler) -> io::Result<ThreadPool> {
         let (sender, receiver) = mpsc::channel();
 
         let receiver = Arc::new(Mutex::new(receiver));
@@ -27,23 +31,26 @@ impl ThreadPool {
         let mut workers = Vec::with_capacity(size.into());
 
         for id in 0..size.into() {
-            workers.push(Worker::new(id, Arc::clone(&receiver)));
+            workers.push(Worker::new(id, Arc::clone(&receiver))?);
         }
 
-        ThreadPool {
+        Ok(ThreadPool {
             panic_handler,
             workers,
             sender: Some(sender),
-        }
+        })
     }
 
-    pub fn execute<F>(&self, f: F)
+    pub fn execute<F>(&self, f: F) -> Result<(), SendError<Job>>
     where
         F: FnOnce() + Send + 'static,
     {
         let job = Box::new(f);
-
-        self.sender.as_ref().unwrap().send(job).unwrap();
+        self.sender
+            .as_ref()
+            .expect("Invariant violated: sender should exist for ThreadPool's entire lifetime")
+            .send(job)?;
+        Ok(())
     }
 }
 
@@ -68,26 +75,27 @@ struct Worker {
 }
 
 impl Worker {
-    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+    fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> io::Result<Worker> {
         let thread = thread::Builder::new()
             .name(format!("{}::Worker({})", module_path!(), id))
             .spawn(move || loop {
-                let message = receiver.lock().unwrap().recv();
-
-                match message {
-                    Ok(job) => {
-                        job();
-                    }
-                    Err(_) => {
-                        break;
+                let message = match receiver.lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned @ PoisonError { .. }) => {
+                        // Receiver mutex poisoned by other thead panic should not affect us
+                        poisoned.into_inner()
                     }
                 }
-            })
-            .unwrap();
+                .recv();
+                match message {
+                    Ok(job) => job(),
+                    Err(RecvError { .. }) => break,
+                }
+            })?;
 
-        Worker {
+        Ok(Worker {
             id,
             thread: Some(thread),
-        }
+        })
     }
 }

@@ -90,20 +90,23 @@ impl Server {
         let mut server = Self {
             config: Arc::new(config),
             tx,
-            thread_pool: Arc::new(ThreadPool::new(
-                thread_count,
-                Box::new(|worker_id: usize, msg: Box<dyn Any>| {
-                    console::warning!("Worker {worker_id} panicked");
-                    // Try both &str and String, I don't know which type panic messages will occur in
-                    if let Some(msg) = msg
-                        .downcast_ref::<&str>()
-                        .map(|s| s.to_string())
-                        .or(msg.downcast_ref::<String>().cloned())
-                    {
-                        console::warning!("{}", msg);
-                    }
-                }),
-            )),
+            thread_pool: Arc::new(
+                ThreadPool::new(
+                    thread_count,
+                    Box::new(|worker_id: usize, msg: Box<dyn Any>| {
+                        console::warning!("Worker {worker_id} panicked");
+                        // Try both &str and String, I don't know which type panic messages will occur in
+                        if let Some(msg) = msg
+                            .downcast_ref::<&str>()
+                            .map(|s| s.to_string())
+                            .or(msg.downcast_ref::<String>().cloned())
+                        {
+                            console::warning!("{}", msg);
+                        }
+                    }),
+                )
+                .unwrap(),
+            ),
             coordinator_id: None,
             dhcp_pool,
             peers: HashMap::new(),
@@ -260,7 +263,8 @@ impl Server {
         let server_tx = self.tx.clone();
         let config = Arc::clone(&self.config);
         self.thread_pool
-            .execute(move || Self::connect_peers(config, server_tx));
+            .execute(move || Self::connect_peers(config, server_tx))
+            .unwrap();
     }
 
     fn serve_client(stream: TcpStream, server_tx: Sender<ServerThreadMessage>) {
@@ -477,7 +481,9 @@ impl Server {
             match stream {
                 Ok(stream) => {
                     let tx = server_tx.clone();
-                    thread_pool.execute(move || Self::serve_client(stream, tx));
+                    thread_pool
+                        .execute(move || Self::serve_client(stream, tx))
+                        .unwrap();
                 }
                 Err(e) => console::error!(&e, "Accepting new client connection failed"),
             }

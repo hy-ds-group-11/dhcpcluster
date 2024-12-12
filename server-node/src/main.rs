@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process::exit,
 };
+use toml_config::TomlConfig;
 
 fn print_error(mut error: &dyn Error) {
     eprintln!("\x1b[93m{error}\x1b[0m");

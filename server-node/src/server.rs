@@ -93,14 +93,14 @@ impl Server {
             thread_pool: Arc::new(ThreadPool::new(
                 thread_count,
                 Box::new(|worker_id: usize, msg: Box<dyn Any>| {
-                    console::error!("Worker {worker_id} panicked");
+                    console::warning!("Worker {worker_id} panicked");
                     // Try both &str and String, I don't know which type panic messages will occur in
                     if let Some(msg) = msg
                         .downcast_ref::<&str>()
                         .map(|s| s.to_string())
                         .or(msg.downcast_ref::<String>().cloned())
                     {
-                        console::error!("{}", msg);
+                        console::warning!("{}", msg);
                     }
                 }),
             )),
@@ -185,8 +185,8 @@ impl Server {
             };
         }
 
-        peer_listener_thread.join_and_log_error();
-        client_listener_thread.join_and_log_error();
+        peer_listener_thread.join_and_handle_panic();
+        client_listener_thread.join_and_handle_panic();
         for peer in server.peers.into_values() {
             peer.disconnect();
         }
@@ -220,20 +220,19 @@ impl Server {
                                     Err(
                                         e @ (HandshakeError::Recv(_) | HandshakeError::SendJoin(_)),
                                     ) => {
+                                        // Expected errors, just use debug log
                                         console::debug!("Handshake failed: {e}")
                                     }
-                                    Err(e @ HandshakeError::NoJoinAck(_)) => {
-                                        console::error!("Unexpected hanshake error: {e}")
+                                    Err(e) => {
+                                        console::error!(&e, "Unexpected hanshake error with {name}")
                                     }
                                 };
                             }
-                            Err(e) => {
-                                console::warning!("Can't connect to peer {name}\n{e}");
-                            }
+                            Err(e) => console::error!(&e, "Can't connect to peer {name}"),
                         }
                     }
                 }
-                Err(e) => console::error!("Name resolution failed for {name}: {e}"),
+                Err(e) => console::error!(&e, "Name resolution failed for {name}"),
             }
         }
         server_tx
@@ -273,7 +272,7 @@ impl Server {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 Self::handle_renew(stream, server_tx, mac_address, ip)
             }
-            Err(e) => console::warning!("Client didn't follow protocol\n{e}"),
+            Err(e) => console::error!(&e, "Client didn't follow protocol"),
         }
     }
 
@@ -323,7 +322,7 @@ impl Server {
                     })
                     .unwrap();
             }
-            Err(e) => console::warning!("Client didn't follow protocol!\n{e}"),
+            Err(e) => console::error!(&e, "Client didn't follow protocol!"),
             Ok(message) => console::warning!("Client didn't follow protocol!\n{message:?}"),
         }
 
@@ -452,7 +451,7 @@ impl Server {
                 }
             }
             Err(e) => {
-                console::warning!("Failed to give ip {ip} to {mac_address:?}\n{e}");
+                console::error!(&e, "Can't confirm lease");
                 tx.send(false).unwrap();
             }
         };
@@ -464,7 +463,7 @@ impl Server {
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::IncomingPeerConnection(stream))
                     .unwrap(),
-                Err(e) => console::warning!("{e:?}"),
+                Err(e) => console::error!(&e, "Accepting new peer connection failed"),
             }
         }
     }
@@ -480,7 +479,7 @@ impl Server {
                     let tx = server_tx.clone();
                     thread_pool.execute(move || Self::serve_client(stream, tx));
                 }
-                Err(e) => console::warning!("{e:?}"),
+                Err(e) => console::error!(&e, "Accepting new client connection failed"),
             }
         }
     }
@@ -514,11 +513,14 @@ impl Server {
                                 ),
                             ).expect("Invariant violated: Server::add_peer() failed when we don't have a stored connection");
                         }
-                        Err(e) => console::warning!("{e:?}"),
+                        Err(e) => console::error!(&e, "Answering handshake failed"),
                     }
                 }
             }
-            _ => console::error!("First message from peer wasn't Join"),
+            _ => console::error!(
+                &HandshakeError::NoJoin(message),
+                "Answering handshake failed"
+            ),
         }
 
         // New peer joined, we want to inform it of the coordinator and reallocate the DHCP pool

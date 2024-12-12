@@ -8,10 +8,10 @@ edition = "2021"
 [dependencies]
 ciborium = "0.2.2"
 serde = { version = "1.0.215", features = ["derive"] }
-toml = "0.8.19"
 terminal_size = "0.4.1"
 protocol = { path = "../protocol" }
 thread-pool = { path = "../thread-pool" }
+toml-config = { path = "../toml-config" }
 thiserror = "2.0.6"
 
 [lints.rust]

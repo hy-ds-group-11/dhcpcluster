@@ -17,6 +17,7 @@ use std::{
     vec::IntoIter,
 };
 use thiserror::Error;
+use toml_config::TomlConfig;
 
 type ServerIndex = usize;
 type QueryCount = u32;

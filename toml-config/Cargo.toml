@@ -1,0 +1,9 @@
+[package]
+name = "toml-config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0.216"
+thiserror = "2.0.6"
+toml = "0.8.19"

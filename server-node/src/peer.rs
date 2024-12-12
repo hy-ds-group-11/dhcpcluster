@@ -22,6 +22,8 @@ pub enum HandshakeError {
     SendJoin(#[from] protocol::CborSendError),
     #[error("Peer responded with {0:?} when expecting JoinAck")]
     NoJoinAck(Message),
+    #[error("Peer initiated with {0:?} when expecting Join")]
+    NoJoin(Message),
 }
 
 #[derive(Debug)]
@@ -107,8 +109,8 @@ impl Peer {
         std::mem::drop(self.tx);
         // TODO implement ^C events? Dropping the channel tx should be enough
         // to stop the threads, as seen in thread_pool
-        self.read_thread.join_and_log_error();
-        self.write_thread.join_and_log_error();
+        self.read_thread.join_and_handle_panic();
+        self.write_thread.join_and_handle_panic();
     }
 
     fn read_thread_fn(

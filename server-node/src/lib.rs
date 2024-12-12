@@ -26,16 +26,16 @@ pub trait ThreadJoin: Sized {
 
     fn name(&self) -> String;
 
-    fn join_and_log_error(self) {
+    fn join_and_handle_panic(self) {
         let name = self.name();
         if let Err(msg) = self.join() {
-            console::error!("Thread {name} panicked");
+            console::warning!("Thread {name} panicked");
             if let Some(msg) = msg
                 .downcast_ref::<&str>()
                 .map(|s| s.to_string())
                 .or(msg.downcast_ref::<String>().cloned())
             {
-                console::error!("{}", msg);
+                console::warning!("{}", msg);
             }
         }
     }

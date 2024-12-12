@@ -1,13 +1,13 @@
 use protocol::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::{
-    error::Error,
     fmt::Display,
     iter,
     net::Ipv4Addr,
     ops::Range,
     time::{Duration, SystemTime},
 };
+use thiserror::Error;
 
 /// A DHCP Lease
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -47,6 +47,15 @@ impl Ipv4Range {
     fn iter_starting_at(&self, at: u32) -> iter::Chain<Range<u32>, Range<u32>> {
         (at..self.end).chain(self.start..at)
     }
+}
+
+#[derive(Error, Debug)]
+pub enum CommitError {
+    #[error("No lease found for ({mac_addr}, {ip_addr})")]
+    LeaseNotFound {
+        mac_addr: MacAddr,
+        ip_addr: Ipv4Addr,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -158,14 +167,14 @@ impl DhcpService {
 
     pub fn commit_lease(
         &mut self,
-        mac_address: MacAddr,
-        ip_address: Ipv4Addr,
-    ) -> Result<Lease, Box<dyn Error>> {
+        mac_addr: MacAddr,
+        ip_addr: Ipv4Addr,
+    ) -> Result<Lease, CommitError> {
         let fresh_timestamp = self.fresh_timestamp();
         if let Some(pending_index) = self
             .pending_leases
             .iter()
-            .position(|l| l.hardware_address == mac_address && l.lease_address == ip_address)
+            .position(|l| l.hardware_address == mac_addr && l.lease_address == ip_addr)
         {
             let mut lease = self.pending_leases.remove(pending_index);
             lease.expiry_timestamp = fresh_timestamp;
@@ -174,12 +183,12 @@ impl DhcpService {
         } else if let Some(lease) = self
             .leases
             .iter_mut()
-            .find(|l| l.hardware_address == mac_address && l.lease_address == ip_address)
+            .find(|l| l.hardware_address == mac_addr && l.lease_address == ip_addr)
         {
             lease.expiry_timestamp = fresh_timestamp;
             return Ok(lease.clone());
         }
-        Err("Can't find matching lease".into())
+        Err(CommitError::LeaseNotFound { mac_addr, ip_addr })
     }
 }
 

@@ -4,6 +4,7 @@
 
 use std::{
     collections::VecDeque,
+    error::Error,
     io::{IsTerminal, Write},
     sync::{
         mpsc::{self, Sender},
@@ -99,7 +100,7 @@ pub fn is_terminal() -> bool {
     std::io::stdout().is_terminal()
 }
 
-pub fn log_str(event: &str, style: &str) {
+pub fn log_string(event: String, style: &str) {
     if is_terminal() {
         for line in event.split("\n") {
             // TODO: Encode messages to a struct with a style-enum and apply escape sequences in [`render`]
@@ -119,29 +120,38 @@ pub fn update_state(state: String) {
     }
 }
 
+pub fn log_error(mut error: &dyn Error) {
+    log_string(format!("{error}"), "[31m");
+    while let Some(source) = error.source() {
+        log_string(format!("Caused by: {source}"), "[35m");
+        error = source;
+    }
+}
+
 macro_rules! debug {
     ($($arg:tt)*) => {{
             if std::env::var("SERVER_VERBOSE").is_ok() {
-                crate::console::log_str(&format!($($arg)*), "[90m");
+                crate::console::log_string(format!($($arg)*), "[90m");
             }
     }};
 }
 
 macro_rules! error {
-    ($($arg:tt)*) => {{
-            crate::console::log_str(&format!($($arg)*), "[31m");
+    ($err:expr, $($arg:tt)*) => {{
+            crate::console::log_string(format!($($arg)*), "[33m");
+            crate::console::log_error($err);
     }};
 }
 
 macro_rules! log {
     ($($arg:tt)*) => {{
-            crate::console::log_str(&format!($($arg)*), "[0m");
+            crate::console::log_string(format!($($arg)*), "[0m");
     }};
 }
 
 macro_rules! warning {
     ($($arg:tt)*) => {{
-            crate::console::log_str(&format!($($arg)*), "[33m");
+            crate::console::log_string(format!($($arg)*), "[33m");
     }};
 }
 

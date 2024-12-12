@@ -7,15 +7,14 @@
 
 use serde::Deserialize;
 use std::{
-    error::Error,
     ffi::OsStr,
     net::{Ipv4Addr, SocketAddr},
     num::NonZero,
-    path::Path,
-    str::FromStr,
+    path::{Path, PathBuf},
     thread,
     time::Duration,
 };
+use thiserror::Error;
 
 use crate::{dhcp::DhcpService, peer::PeerId};
 
@@ -32,14 +31,6 @@ struct ConfigFile {
     lease_time: u64,
     dhcp_address: SocketAddr,
     thread_count: Option<usize>,
-}
-
-impl FromStr for ConfigFile {
-    type Err = toml::de::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        toml::from_str(s)
-    }
 }
 
 /// Server configuration
@@ -99,19 +90,37 @@ impl From<ConfigFile> for Config {
     }
 }
 
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Config file path should end in .toml")]
+    FileExtension,
+    #[error("Failed to read config file {path}")]
+    ReadFile {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("Failed to parse config file {path}")]
+    ParseFile {
+        path: PathBuf,
+        source: toml::de::Error,
+    },
+}
+
 impl Config {
     /// Loads a .toml file from the filesystem, parses it, and initializes a [`Config`].
-    ///
-    /// ## Error cases:
-    /// - File extension is not .toml
-    /// - File access is unsuccessful
-    /// - TOML parsing failure
-    pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Box<dyn Error>> {
+    pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         if path.as_ref().extension() != Some(OsStr::new("toml")) {
-            return Err("Config file path should end in .toml".into());
+            return Err(Error::FileExtension);
         }
-        let toml = std::fs::read_to_string(path)?;
-        let conf = ConfigFile::from_str(&toml)?;
+        let path = path.as_ref();
+        let toml = std::fs::read_to_string(path).map_err(|e| Error::ReadFile {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let conf: ConfigFile = toml::from_str(&toml).map_err(|e| Error::ParseFile {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
         Ok(conf.into())
     }
 }

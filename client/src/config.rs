@@ -54,6 +54,7 @@ pub enum Error {
 }
 
 impl Config {
+    /// Loads a .toml file from the filesystem, parses it, and initializes a [`Config`].
     pub fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         if path.as_ref().extension() != Some(OsStr::new("toml")) {
             return Err(Error::FileExtension);

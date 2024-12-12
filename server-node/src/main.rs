@@ -8,8 +8,16 @@ use std::{
     process::exit,
 };
 
+fn print_error(mut error: &dyn Error) {
+    eprintln!("\x1b[93m{error}\x1b[0m");
+    while let Some(source) = error.source() {
+        eprintln!("Caused by: \x1b[35m{source}\x1b[0m");
+        error = source;
+    }
+}
+
 #[cfg_attr(coverage_nightly, coverage(off))]
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() {
     let config_file_path: PathBuf = std::env::args_os()
         .nth(1)
         .unwrap_or("config.toml".into())
@@ -22,8 +30,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             match Config::load_toml_file(&joined_path) {
                 Ok(config) => config,
                 Err(e2) => {
-                    eprintln!("\x1b[93mCouldn't read {config_file_path:?}: {e1}");
-                    eprintln!("Couldn't read {joined_path:?}: {e2}\x1b[0m");
+                    print_error(&e1);
+                    print_error(&e2);
                     exit(1);
                 }
             }
@@ -31,9 +39,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     // Start listening
-    let peer_listener = TcpListener::bind(config.address_private)?;
-    let client_listener = TcpListener::bind(config.dhcp_address)?;
+    let peer_listener = match TcpListener::bind(config.address_private) {
+        Ok(listener) => listener,
+        Err(e) => {
+            print_error(&e);
+            exit(2);
+        }
+    };
+    let client_listener = match TcpListener::bind(config.dhcp_address) {
+        Ok(listener) => listener,
+        Err(e) => {
+            print_error(&e);
+            exit(3);
+        }
+    };
     Server::start(config, peer_listener, client_listener);
-
-    Ok(())
 }

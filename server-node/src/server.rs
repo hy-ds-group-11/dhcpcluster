@@ -38,7 +38,6 @@ type LeaseConfirmation = bool;
 pub enum ServerThreadMessage {
     IncomingPeerConnection(TcpStream),
     EstablishedPeerConnection(JoinSuccess),
-    ConnectAttemptFinished,
     PeerLost(PeerId),
     ElectionTimeout,
     ProtocolMessage {
@@ -156,8 +155,7 @@ impl Server {
             match server.last_connect_attempt {
                 ConnectAttempt::Never => server.attempt_connect(),
                 ConnectAttempt::Finished(at) => {
-                    if at.elapsed().unwrap_or(Duration::ZERO) > server.config.heartbeat_timeout * 3
-                    {
+                    if at.elapsed().unwrap_or(Duration::ZERO) > server.config.heartbeat_timeout {
                         server.attempt_connect()
                     }
                 }
@@ -180,10 +178,6 @@ impl Server {
                         // Need to initiate election, cluster changed
                         server.start_election();
                     }
-                }
-                Ok(ConnectAttemptFinished) => {
-                    server.last_connect_attempt = ConnectAttempt::Finished(SystemTime::now());
-                    console::debug!("Connection attempt finished");
                 }
                 Ok(PeerLost(peer_id)) => server.remove_peer(peer_id),
                 Ok(ElectionTimeout) => server.finish_election(),
@@ -211,85 +205,81 @@ impl Server {
         Ok(())
     }
 
-    fn connect_peers(config: Arc<Config>, server_tx: Sender<ServerThreadMessage>) {
+    fn connect_peer(
+        config: Arc<Config>,
+        server_tx: Sender<ServerThreadMessage>,
+        peer_index: usize,
+    ) {
+        let (peer_id, name) = &config.peers[peer_index];
         let timeout = config.peer_connection_timeout;
-        for (peer_id, name) in config.peers.iter() {
-            console::debug!("Connecting to {peer_id} at {name}");
-            match name.to_socket_addrs() {
-                Ok(addrs) => {
-                    for addr in addrs {
-                        let result = if let Some(timeout) = timeout {
-                            TcpStream::connect_timeout(&addr, timeout)
-                        } else {
-                            TcpStream::connect(addr)
-                        };
+        console::debug!("Connecting to {peer_id} at {name}");
+        match name.to_socket_addrs() {
+            Ok(addrs) => {
+                for addr in addrs {
+                    let result = if let Some(timeout) = timeout {
+                        TcpStream::connect_timeout(&addr, timeout)
+                    } else {
+                        TcpStream::connect(addr)
+                    };
 
-                        match result {
-                            Ok(stream) => {
-                                match Peer::start_handshake(
-                                    stream,
-                                    Arc::clone(&config),
-                                    server_tx.clone(),
-                                ) {
-                                    Ok(success) => server_tx
-                                        .send(ServerThreadMessage::EstablishedPeerConnection(
-                                            success,
-                                        ))
-                                        .expect("Invariant violated: server_rx has been dropped before connect_peers has finished"),
-                                    Err(
-                                        e @ (HandshakeError::Recv(_) | HandshakeError::SendJoin(_)),
-                                    ) => {
-                                        // Expected errors, just use debug log
-                                        console::debug!("Handshake failed: {e}")
-                                    }
-                                    Err(e) => {
-                                        console::error!(
-                                            &e,
-                                            "Unexpected hanshake error with {peer_id} at {name}"
-                                        )
-                                    }
-                                };
-                            }
-                            Err(e) => {
-                                console::error!(&e, "Can't connect to peer {peer_id} at {name}")
-                            }
+                    match result {
+                        Ok(stream) => {
+                            match Peer::start_handshake(
+                                stream,
+                                Arc::clone(&config),
+                                server_tx.clone(),
+                            ) {
+                                Ok(success) => server_tx
+                                    .send(ServerThreadMessage::EstablishedPeerConnection(
+                                        success,
+                                    ))
+                                    .expect("Invariant violated: server_rx has been dropped before connect_peers has finished"),
+                                Err(
+                                    e @ (HandshakeError::Recv(_) | HandshakeError::SendJoin(_)),
+                                ) => {
+                                    // Expected errors, just use debug log
+                                    console::debug!("Handshake failed: {e}")
+                                }
+                                Err(e) => {
+                                    console::error!(
+                                        &e,
+                                        "Unexpected hanshake error with {peer_id} at {name}"
+                                    )
+                                }
+                            };
+                        }
+                        Err(e) => {
+                            console::error!(&e, "Can't connect to peer {peer_id} at {name}")
                         }
                     }
                 }
-                Err(e) => console::error!(&e, "Name resolution failed for {peer_id} at {name}"),
             }
+            Err(e) => console::error!(&e, "Name resolution failed for {peer_id} at {name}"),
         }
-        server_tx
-            .send(ServerThreadMessage::ConnectAttemptFinished)
-            .expect(
-                "Invariant violated: server_rx has been dropped before connect_peers has finished",
-            );
     }
 
     fn attempt_connect(&mut self) {
         self.last_connect_attempt = ConnectAttempt::Running;
         console::debug!("Connection attempt started");
 
-        // For now this is the only check stopping us from spamming
-        // connection attempts to peers with whom we're already connected.
-        // TODO: If we want to KNOW which peers exactly are disconnected,
-        // we need to encode peer IDs along with the names/addresses in Config,
-        // and modify the Server::connect_peers function to reason about
-        // which peers are offline and which aren't.
-        if self.peers.len() == self.config.peers.len() {
-            self.tx
-                .send(ServerThreadMessage::ConnectAttemptFinished)
-                .expect(
-                    "Invariant violated: server_rx has been dropped after calling attempt_connect",
-                );
-            return;
+        // Using enumerate is a dirty hack which simplifies how much we need to pass to the thread
+        // It already has access to an unchanging Config, so this avoids adding lifetimes etc.
+        // TODO: Implement a better, more Rust-like solution
+        for (index, (peer_id, _)) in self.config.peers.iter().enumerate() {
+            // Only start connections with peers we don't have a connection with
+            // Always have the higher ID start connections to avoid race conditions with concurrent
+            // handshakes
+            if !self.peers.contains_key(peer_id) && self.config.id > *peer_id {
+                let server_tx = self.tx.clone();
+                let config = Arc::clone(&self.config);
+                self.thread_pool
+                    .execute(move || Self::connect_peer(config, server_tx, index))
+                    .unwrap();
+            }
         }
 
-        let server_tx = self.tx.clone();
-        let config = Arc::clone(&self.config);
-        self.thread_pool
-            .execute(move || Self::connect_peers(config, server_tx))
-            .unwrap();
+        self.last_connect_attempt = ConnectAttempt::Finished(SystemTime::now());
+        console::debug!("Connection threads spawned");
     }
 
     fn serve_client(stream: TcpStream, server_tx: Sender<ServerThreadMessage>) {
@@ -573,20 +563,15 @@ impl Server {
 
         match message {
             Message::Join(peer_id) => {
-                if self.peers.contains_key(&peer_id) {
-                    // This reconnection is redundant, just close the stream early
-                    console::debug!("Already have {peer_id}, closing connection");
-                    return;
-                } else {
-                    let result = Message::send(
-                        &stream,
-                        &Message::JoinAck(self.config.id, self.dhcp_pool.leases.clone()),
-                    );
-                    match result {
-                        Ok(_) => {
-                            console::log!("Peer {peer_id} joined");
+                let result = Message::send(
+                    &stream,
+                    &Message::JoinAck(self.config.id, self.dhcp_pool.leases.clone()),
+                );
+                match result {
+                    Ok(_) => {
+                        console::log!("Peer {peer_id} joined");
 
-                            self.add_peer(
+                        self.add_peer(
                                 peer_id,
                                 Peer::new(
                                     stream,
@@ -594,10 +579,9 @@ impl Server {
                                     self.tx.clone(),
                                     self.config.heartbeat_timeout,
                                 ),
-                            ).expect("Invariant violated: Server::add_peer() failed when we don't have a stored connection");
-                        }
-                        Err(e) => console::error!(&e, "Answering handshake failed"),
+                            ).expect("Invariant violated: Server::add_peer() failed when we shouldn't have a stored connection");
                     }
+                    Err(e) => console::error!(&e, "Answering handshake failed"),
                 }
             }
             _ => console::error!(

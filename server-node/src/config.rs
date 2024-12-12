@@ -19,7 +19,7 @@ use toml_config::TomlConfig;
 #[derive(Deserialize, Debug)]
 pub struct ConfigFile {
     address_private: SocketAddr,
-    peers: Vec<String>,
+    peers: Vec<(PeerId, String)>,
     id: PeerId,
     heartbeat_timeout: u64,
     peer_connection_timeout: Option<u64>,
@@ -36,7 +36,7 @@ pub struct ConfigFile {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub address_private: SocketAddr,
-    pub peers: Vec<String>,
+    pub peers: Vec<(PeerId, String)>,
     pub id: PeerId,
     pub heartbeat_timeout: Duration,
     pub peer_connection_timeout: Option<Duration>,

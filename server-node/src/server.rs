@@ -152,6 +152,18 @@ impl Server {
             // Render pretty text representation if running in a terminal
             console::update_state(format!("{server}"));
 
+            // Periodically check if server needs to connect to peers
+            match server.last_connect_attempt {
+                ConnectAttempt::Never => server.attempt_connect(),
+                ConnectAttempt::Finished(at) => {
+                    if at.elapsed().unwrap_or(Duration::ZERO) > server.config.heartbeat_timeout * 3
+                    {
+                        server.attempt_connect()
+                    }
+                }
+                _ => {}
+            };
+
             // Receive the next message from other threads (peer I/O, listeners, timers etc.)
             match server_rx.recv_timeout(server.config.heartbeat_timeout) {
                 Ok(IncomingPeerConnection(tcp_stream)) => server.answer_handshake(tcp_stream),
@@ -189,18 +201,6 @@ impl Server {
                     break;
                 }
             };
-
-            // Periodically check if server needs to connect to peers
-            match server.last_connect_attempt {
-                ConnectAttempt::Never => server.attempt_connect(),
-                ConnectAttempt::Finished(at) => {
-                    if at.elapsed().unwrap_or(Duration::ZERO) > server.config.heartbeat_timeout * 3
-                    {
-                        server.attempt_connect()
-                    }
-                }
-                _ => {}
-            };
         }
 
         peer_listener_thread.join_and_handle_panic();
@@ -213,8 +213,8 @@ impl Server {
 
     fn connect_peers(config: Arc<Config>, server_tx: Sender<ServerThreadMessage>) {
         let timeout = config.peer_connection_timeout;
-        for name in config.peers.iter() {
-            console::debug!("Connecting to {name}");
+        for (peer_id, name) in config.peers.iter() {
+            console::debug!("Connecting to {peer_id} at {name}");
             match name.to_socket_addrs() {
                 Ok(addrs) => {
                     for addr in addrs {
@@ -243,15 +243,20 @@ impl Server {
                                         console::debug!("Handshake failed: {e}")
                                     }
                                     Err(e) => {
-                                        console::error!(&e, "Unexpected hanshake error with {name}")
+                                        console::error!(
+                                            &e,
+                                            "Unexpected hanshake error with {peer_id} at {name}"
+                                        )
                                     }
                                 };
                             }
-                            Err(e) => console::error!(&e, "Can't connect to peer {name}"),
+                            Err(e) => {
+                                console::error!(&e, "Can't connect to peer {peer_id} at {name}")
+                            }
                         }
                     }
                 }
-                Err(e) => console::error!(&e, "Name resolution failed for {name}"),
+                Err(e) => console::error!(&e, "Name resolution failed for {peer_id} at {name}"),
             }
         }
         server_tx

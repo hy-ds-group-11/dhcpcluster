@@ -32,18 +32,19 @@ pub enum MacAddrParseError {
 
 impl FromStr for MacAddr {
     type Err = MacAddrParseError;
+
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let mut bytes = Vec::with_capacity(6);
+        let mut bytes = [0; 6];
         let mut split = value.split(":");
-        for i in 0..6 {
+        for (i, byte) in bytes.iter_mut().enumerate() {
             match split.next() {
                 Some(octet) => {
-                    bytes.push(u8::from_str_radix(octet, 16).map_err(|e| {
+                    *byte = u8::from_str_radix(octet, 16).map_err(|e| {
                         MacAddrParseError::ParseOctet {
                             index: i,
                             source: e,
                         }
-                    })?);
+                    })?;
                 }
                 None => return Err(MacAddrParseError::Short(i)),
             }
@@ -53,9 +54,7 @@ impl FromStr for MacAddr {
             return Err(MacAddrParseError::Long);
         }
 
-        Ok(Self([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
-        ]))
+        Ok(Self(bytes))
     }
 }
 

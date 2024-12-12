@@ -6,11 +6,15 @@ use crate::{
     peer::{HandshakeError, JoinSuccess, Peer, PeerId},
     ThreadJoin,
 };
-use protocol::{DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbor, SendCbor};
+use protocol::{
+    CborRecvError, DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbor, RecvError,
+    SendCbor,
+};
 use std::{
     any::Any,
     collections::HashMap,
     fmt::Display,
+    io::{self, ErrorKind},
     net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{
         mpsc::{channel, Sender},
@@ -19,6 +23,7 @@ use std::{
     thread,
     time::{Duration, SystemTime},
 };
+use thiserror::Error;
 use thread_pool::ThreadPool;
 
 #[derive(Debug)]
@@ -66,6 +71,12 @@ enum ConnectAttempt {
     Finished(SystemTime),
 }
 
+#[derive(Error, Debug)]
+pub enum Error {
+    #[error("Failed to spawn threads")]
+    Spawn(#[source] io::Error),
+}
+
 /// The distributed DHCP server
 pub struct Server {
     config: Arc<Config>,
@@ -81,7 +92,11 @@ pub struct Server {
 
 impl Server {
     /// Start listening to incoming connections from server peers and DHCP clients.
-    pub fn start(config: Config, peer_listener: TcpListener, client_listener: TcpListener) {
+    pub fn start(
+        config: Config,
+        peer_listener: TcpListener,
+        client_listener: TcpListener,
+    ) -> Result<(), Error> {
         // Create main thread channel
         let (tx, server_rx) = channel::<ServerThreadMessage>();
         let dhcp_pool = config.dhcp_pool.clone();
@@ -105,7 +120,7 @@ impl Server {
                         }
                     }),
                 )
-                .unwrap(),
+                .map_err(Error::Spawn)?,
             ),
             coordinator_id: None,
             dhcp_pool,
@@ -120,7 +135,7 @@ impl Server {
             thread::Builder::new()
                 .name(format!("{}::peer_listener_thread", module_path!()))
                 .spawn(move || Server::listen_nodes(peer_listener, server_tx))
-                .unwrap()
+                .map_err(Error::Spawn)?
         };
 
         let client_listener_thread = {
@@ -129,7 +144,7 @@ impl Server {
             thread::Builder::new()
                 .name(format!("{}::client_listener_thread", module_path!()))
                 .spawn(move || Self::listen_clients(client_listener, server_tx, thread_pool))
-                .unwrap()
+                .map_err(Error::Spawn)?
         };
 
         use ServerThreadMessage::*;
@@ -193,6 +208,7 @@ impl Server {
         for peer in server.peers.into_values() {
             peer.disconnect();
         }
+        Ok(())
     }
 
     fn connect_peers(config: Arc<Config>, server_tx: Sender<ServerThreadMessage>) {
@@ -219,7 +235,7 @@ impl Server {
                                         .send(ServerThreadMessage::EstablishedPeerConnection(
                                             success,
                                         ))
-                                        .unwrap(),
+                                        .expect("Invariant violated: server_rx has been dropped before connect_peers has finished"),
                                     Err(
                                         e @ (HandshakeError::Recv(_) | HandshakeError::SendJoin(_)),
                                     ) => {
@@ -240,7 +256,9 @@ impl Server {
         }
         server_tx
             .send(ServerThreadMessage::ConnectAttemptFinished)
-            .unwrap();
+            .expect(
+                "Invariant violated: server_rx has been dropped before connect_peers has finished",
+            );
     }
 
     fn attempt_connect(&mut self) {
@@ -256,7 +274,9 @@ impl Server {
         if self.peers.len() == self.config.peers.len() {
             self.tx
                 .send(ServerThreadMessage::ConnectAttemptFinished)
-                .unwrap();
+                .expect(
+                    "Invariant violated: server_rx has been dropped after calling attempt_connect",
+                );
             return;
         }
 
@@ -276,7 +296,7 @@ impl Server {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 Self::handle_renew(stream, server_tx, mac_address, ip)
             }
-            Err(e) => console::error!(&e, "Client didn't follow protocol"),
+            Err(e) => console::error!(&e, "Could not receive request from the client"),
         }
     }
 
@@ -288,13 +308,15 @@ impl Server {
         let (tx, rx) = channel::<LeaseOffer>();
         server_tx
             .send(ServerThreadMessage::LeaseRequest { mac_address, tx })
-            .unwrap();
+            .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
 
         // Wait for processing DHCP discover
         let LeaseOffer { lease, subnet_mask } = match rx.recv() {
             Ok(offer) => offer,
             Err(_) => {
-                DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap();
+                if let Err(e) = DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack) {
+                    console::error!(&e, "Could not reply with Nack to the client");
+                }
                 return;
             }
         };
@@ -303,38 +325,65 @@ impl Server {
         let lease_time = lease
             .expiry_timestamp
             .duration_since(SystemTime::now())
-            .unwrap()
+            .unwrap_or(Duration::ZERO)
             .as_secs() as u32;
-        DhcpServerMessage::send(
+
+        if let Err(e) = DhcpServerMessage::send(
             &stream,
             &DhcpServerMessage::Offer(DhcpOffer {
                 ip,
                 lease_time,
                 subnet_mask,
             }),
-        )
-        .unwrap();
-        let result = DhcpClientMessage::recv_timeout(&stream, Duration::from_secs(10));
-        let (tx, rx) = channel::<LeaseConfirmation>();
-        match result {
+        ) {
+            console::error!(&e, "Could not send offer to the client");
+            return;
+        }
+
+        let timeout = Duration::from_secs(10);
+        match DhcpClientMessage::recv_timeout(&stream, timeout) {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
+                let (tx, rx) = channel::<LeaseConfirmation>();
                 server_tx
                     .send(ServerThreadMessage::ConfirmRequest {
                         mac_address,
                         ip,
                         tx,
                     })
-                    .unwrap();
+                    .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
+                // Wait for processing DHCP commit
+                match rx.recv_timeout(timeout) {
+                    Ok(committed) => {
+                        if committed {
+                            if let Err(e) =
+                                DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack)
+                            {
+                                console::error!(&e, "Could not send Ack to the client");
+                            }
+                        } else if let Err(e) =
+                            DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack)
+                        {
+                            console::error!(&e, "Could not send Nack to the client");
+                        }
+                    }
+                    Err(_) => todo!(),
+                }
             }
-            Err(e) => console::error!(&e, "Client didn't follow protocol!"),
-            Ok(message) => console::warning!("Client didn't follow protocol!\n{message:?}"),
-        }
-
-        // Wait for processing DHCP commit
-        if rx.recv_timeout(Duration::from_secs(10)).unwrap_or(false) {
-            DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack).unwrap()
-        } else {
-            DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap()
+            Ok(message) => console::warning!(
+                "Client didn't follow protocol!\nExpected: Request, got: {message:?}"
+            ),
+            Err(ref e) => match e {
+                CborRecvError::Receive(RecvError::Io(io_error)) => match io_error.kind() {
+                    ErrorKind::WouldBlock | ErrorKind::TimedOut => {
+                        console::error!(
+                            e,
+                            "Client didn't follow Discover with Request within {timeout:?}"
+                        )
+                    }
+                    _ => console::error!(e, "Could not receive client reply"),
+                },
+                _ => console::error!(e, "Could not receive client reply"),
+            },
         }
     }
 
@@ -351,11 +400,13 @@ impl Server {
                 ip,
                 tx,
             })
-            .unwrap();
-        if rx.recv().unwrap() {
-            DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack).unwrap()
-        } else {
-            DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack).unwrap()
+            .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
+        if rx.recv().unwrap_or(false) {
+            if let Err(e) = DhcpServerMessage::send(&stream, &DhcpServerMessage::Ack) {
+                console::error!(&e, "Could not send Ack to the client");
+            }
+        } else if let Err(e) = DhcpServerMessage::send(&stream, &DhcpServerMessage::Nack) {
+            console::error!(&e, "Could not send Nack to the client");
         }
     }
 
@@ -384,7 +435,7 @@ impl Server {
             console::log!("Received Election from lower id");
             self.peers
                 .get(&sender_id)
-                .unwrap()
+                .expect("Invariant violated: server.peers must contain election message sender")
                 .send_message(Message::Okay);
             self.start_election();
         }
@@ -430,11 +481,15 @@ impl Server {
             Some(lease) => lease,
             None => return,
         };
-        tx.send(LeaseOffer {
+        if let Err(e) = tx.send(LeaseOffer {
             lease,
             subnet_mask: self.config.prefix_length,
-        })
-        .unwrap();
+        }) {
+            console::error!(
+                &e,
+                "Could not reply to client worker which requested a lease"
+            );
+        }
     }
 
     fn handle_confirm_lease(
@@ -449,14 +504,24 @@ impl Server {
 
         match self.dhcp_pool.commit_lease(mac_address, ip) {
             Ok(lease) => {
-                tx.send(true).unwrap();
+                if let Err(e) = tx.send(true) {
+                    console::error!(
+                        &e,
+                        "Could not send lease confirmation to the worker which requested it"
+                    );
+                }
                 for peer in self.peers.values() {
                     peer.send_message(Message::Lease(lease.clone()));
                 }
             }
             Err(e) => {
                 console::error!(&e, "Can't confirm lease");
-                tx.send(false).unwrap();
+                if let Err(e) = tx.send(false) {
+                    console::error!(
+                        &e,
+                        "Could not send lease denial to the worker which requested it"
+                    );
+                }
             }
         };
     }
@@ -464,9 +529,10 @@ impl Server {
     fn listen_nodes(listener: TcpListener, server_tx: Sender<ServerThreadMessage>) {
         for stream in listener.incoming() {
             match stream {
+                // TODO: Here we may need a mechanism to end this thread, unless we just decide to detach it?
                 Ok(stream) => server_tx
                     .send(ServerThreadMessage::IncomingPeerConnection(stream))
-                    .unwrap(),
+                    .expect("Invariant violated: server_rx has been dropped before joining peer listener thread"),
                 Err(e) => console::error!(&e, "Accepting new peer connection failed"),
             }
         }
@@ -492,7 +558,13 @@ impl Server {
 
     fn answer_handshake(&mut self, stream: TcpStream) {
         // TODO: security: we should have a mechanism to authenticate peer, perhaps TLS
-        let message = Message::recv_timeout(&stream, self.config.heartbeat_timeout).unwrap();
+        let message = match Message::recv_timeout(&stream, self.config.heartbeat_timeout) {
+            Ok(message) => message,
+            Err(e) => {
+                console::error!(&e, "Could not receive client handshake message");
+                return;
+            }
+        };
 
         match message {
             Message::Join(peer_id) => {
@@ -589,9 +661,10 @@ impl Server {
                 console::log!("Starting election wait");
                 thread::sleep(dur);
                 console::log!("Election wait over");
-                server_tx
-                    .send(ServerThreadMessage::ElectionTimeout)
-                    .unwrap();
+                if let Err(e) = server_tx.send(ServerThreadMessage::ElectionTimeout) {
+                    console::warning!("Election timer thread can't notify the server");
+                    console::error!(&e);
+                }
             })
             .unwrap(); // Drop JoinHandle, detaching election thread from server thread
     }

@@ -141,6 +141,9 @@ macro_rules! error {
             crate::console::log_string(format!($($arg)*), "[33m");
             crate::console::log_error($err);
     }};
+    ($err:expr) => {{
+            crate::console::log_error($err);
+    }}
 }
 
 macro_rules! log {

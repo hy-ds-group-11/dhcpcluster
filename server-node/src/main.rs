@@ -54,5 +54,8 @@ fn main() {
             exit(3);
         }
     };
-    Server::start(config, peer_listener, client_listener);
+    if let Err(e) = Server::start(config, peer_listener, client_listener) {
+        print_error(&e);
+        exit(4);
+    }
 }

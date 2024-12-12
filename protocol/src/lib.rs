@@ -97,10 +97,13 @@ pub enum DhcpServerMessage {
     Nack,
 }
 
+pub type RecvError = ciborium::de::Error<std::io::Error>;
+pub type SendError = ciborium::ser::Error<std::io::Error>;
+
 #[derive(Error, Debug)]
 pub enum CborRecvError {
     #[error("Failed to receive incoming CBOR")]
-    Receive(#[from] ciborium::de::Error<std::io::Error>),
+    Receive(#[from] RecvError),
     #[error("Failed to set stream read timeout")]
     SetTimeout(#[source] std::io::Error),
     #[error("Failed to access stream read timeout")]
@@ -110,9 +113,11 @@ pub enum CborRecvError {
 #[derive(Error, Debug)]
 pub enum CborSendError {
     #[error("Failed to send CBOR")]
-    Send(#[from] ciborium::ser::Error<std::io::Error>),
+    Send(#[from] SendError),
 }
 
+// TODO: remove the recv_timeout variant in favor of setting timeouts in connection handling code
+// The temporary timeout setting may be fragile
 pub trait RecvCbor: Sized + for<'a> Deserialize<'a> {
     /// # Read a message from a [`TcpStream`].
     /// This function can block the calling thread for the stream's current timeout setting (see [`TcpStream::set_read_timeout`]).

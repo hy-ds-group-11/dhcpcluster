@@ -305,7 +305,7 @@ dependencies = [
 
 [[package]]
 name = "server-node"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "ciborium",
  "protocol",

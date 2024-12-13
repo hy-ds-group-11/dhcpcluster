@@ -18,8 +18,8 @@ pub struct Lease {
 /// IPv4 address pool to serve. `end` not included.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Ipv4Range {
-    pub start: u32,
-    pub end: u32,
+    start: u32,
+    end: u32,
 }
 
 impl Display for Ipv4Range {
@@ -34,16 +34,60 @@ impl Display for Ipv4Range {
 }
 
 impl Ipv4Range {
-    fn new(start: u32, end: u32) -> Self {
+    #[must_use]
+    pub fn new(start: u32, end: u32) -> Self {
+        assert!(start <= end);
         Self { start, end }
     }
 
-    fn len(&self) -> u32 {
+    #[must_use]
+    pub fn start(&self) -> Ipv4Addr {
+        Ipv4Addr::from_bits(self.start)
+    }
+
+    #[must_use]
+    pub fn end(&self) -> Ipv4Addr {
+        Ipv4Addr::from_bits(self.end)
+    }
+
+    #[must_use]
+    pub fn len(&self) -> u32 {
         self.end - self.start
     }
 
-    fn iter_starting_at(&self, at: u32) -> impl Iterator<Item = u32> {
-        (at..self.end).chain(self.start..at)
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.start == self.end
+    }
+
+    pub fn iter_starting_at(&self, at: Ipv4Addr) -> impl Iterator<Item = Ipv4Addr> {
+        let at = at.to_bits();
+        (at..self.end)
+            .chain(self.start..at)
+            .map(Ipv4Addr::from_bits)
+    }
+
+    #[must_use]
+    pub fn from_cidr(ip_address: Ipv4Addr, prefix_length: u32) -> Self {
+        let start = ip_address.to_bits();
+        let end = start + 2_u32.pow(32 - prefix_length) - 1;
+        Self::new(start, end)
+    }
+
+    #[must_use]
+    pub fn divide(&self, parts: u32) -> Vec<Self> {
+        let pool_size = self.len() / parts;
+        let mut pools = Vec::with_capacity(parts as usize);
+
+        for i in 0..parts {
+            pools.push(Self::new(
+                self.start + i * pool_size,
+                self.start + (i + 1) * pool_size,
+            ));
+        }
+        pools[parts as usize - 1].end += self.len() % parts;
+
+        pools
     }
 }
 
@@ -57,60 +101,21 @@ pub enum CommitError {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct Pool {
-    pub range: Ipv4Range,
-    pub lease_time: Duration,
-}
-
-impl Pool {
-    #[must_use]
-    pub fn new(start: u32, end: u32, lease_time: Duration) -> Self {
-        Self {
-            range: Ipv4Range::new(start, end),
-            lease_time,
-        }
-    }
-
-    #[must_use]
-    pub fn from_cidr(ip_address: Ipv4Addr, prefix_length: u32, lease_time: Duration) -> Self {
-        let start = ip_address.to_bits();
-        let end = start + 2_u32.pow(32 - prefix_length) - 1;
-        Self::new(start, end, lease_time)
-    }
-
-    #[must_use]
-    pub fn divide(&self, parts: u32) -> Vec<Self> {
-        let diff = self.range.len();
-        let pool_size = diff / parts;
-        let mut pools = Vec::with_capacity(parts as usize);
-
-        for i in 0..parts {
-            pools.push(Self::new(
-                self.range.start + i * pool_size,
-                self.range.start + (i + 1) * pool_size,
-                self.lease_time,
-            ));
-        }
-        pools[parts as usize - 1].range.end += diff % parts;
-
-        pools
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Service {
-    pub pool: Pool,
+    pub pool: Ipv4Range,
+    pub lease_time: Duration,
     pub leases: Vec<Lease>,
     pub pending_leases: Vec<Lease>,
-    next_candidate_address: u32,
+    next_candidate_address: Ipv4Addr,
 }
 
 impl Service {
     #[must_use]
-    pub fn new_with_leases(pool: Pool, leases: &[Lease]) -> Self {
-        let next_candidate_address = pool.range.start;
+    pub fn new_with_leases(pool: Ipv4Range, lease_time: Duration, leases: &[Lease]) -> Self {
+        let next_candidate_address = pool.start();
         Self {
             pool,
+            lease_time,
             leases: leases.into(),
             pending_leases: Vec::new(),
             next_candidate_address,
@@ -118,14 +123,12 @@ impl Service {
     }
 
     #[must_use]
-    pub fn new(pool: Pool) -> Self {
-        Self::new_with_leases(pool, &[])
+    pub fn new(pool: Ipv4Range, lease_time: Duration) -> Self {
+        Self::new_with_leases(pool, lease_time, &[])
     }
 
-    fn fresh_timestamp(&self) -> SystemTime {
-        SystemTime::now()
-            .checked_add(self.pool.lease_time)
-            .expect("Time overflow")
+    pub fn set_pool(&mut self, pool: Ipv4Range) {
+        self.pool = pool;
     }
 
     pub fn add_lease(&mut self, new_lease: Lease) {
@@ -156,28 +159,24 @@ impl Service {
 
         // First check a range starting from the last address given
         // Fall back to checking from the start of the full range
-        for ip_addr in self
-            .pool
-            .range
-            .iter_starting_at(self.next_candidate_address)
-        {
+        for ip_addr in self.pool.iter_starting_at(self.next_candidate_address) {
             // TODO: Use HashMap or other more efficient collection
             if self
                 .leases
                 .iter()
                 .chain(self.pending_leases.iter())
-                .any(|l| l.address.to_bits() == ip_addr)
+                .any(|l| l.address == ip_addr)
             {
                 continue;
             }
 
             // This won't overflow the range end
             // because the maximum value of ip_addr is range.end - 1
-            self.next_candidate_address = ip_addr + 1;
+            self.next_candidate_address = Ipv4Addr::from_bits(ip_addr.to_bits() + 1);
 
             let lease = Lease {
                 hardware_address: mac_address,
-                address: Ipv4Addr::from_bits(ip_addr),
+                address: ip_addr,
                 expiry_timestamp: self.fresh_timestamp(),
             };
             self.pending_leases.push(lease.clone());
@@ -212,6 +211,12 @@ impl Service {
         }
         Err(CommitError::LeaseNotFound { mac_addr, ip_addr })
     }
+
+    fn fresh_timestamp(&self) -> SystemTime {
+        SystemTime::now()
+            .checked_add(self.lease_time)
+            .expect("Time overflow")
+    }
 }
 
 impl Display for Lease {
@@ -226,7 +231,7 @@ impl Display for Lease {
 
 impl Display for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", self.pool.range)?;
+        writeln!(f, "{}", self.pool)?;
         if !self.leases.is_empty() {
             writeln!(f)?;
         }

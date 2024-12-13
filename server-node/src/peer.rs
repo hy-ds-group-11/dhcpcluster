@@ -93,7 +93,7 @@ impl Peer {
     ) -> Result<JoinSuccess, HandshakeError> {
         Message::send(&stream, &Message::Join(config.id))?;
         match Message::recv_timeout(&stream, config.heartbeat_timeout)? {
-            Message::JoinAck(peer_id, leases) => {
+            Message::JoinAck { peer_id, leases } => {
                 console::log!("Connected to peer {peer_id}");
                 Ok(JoinSuccess {
                     peer_id,
@@ -126,7 +126,7 @@ impl Peer {
         // as set_read_timeout was called in Peer::new
         while let Ok(message) = Message::recv(stream) {
             match message {
-                Message::Join(_) | Message::JoinAck(..) => {
+                Message::Join(_) | Message::JoinAck { .. } => {
                     console::warning!("Peer {peer_id} tried to send {message:?} after handshake");
                     break;
                 }

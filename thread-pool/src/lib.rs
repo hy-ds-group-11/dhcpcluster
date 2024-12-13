@@ -235,7 +235,7 @@ impl Worker {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, reason = "Unwrap is ok in test code")]
 mod tests {
     use std::time::Duration;
 

@@ -1,7 +1,7 @@
 use crate::{
     config::Config,
     console,
-    dhcp::{self, Lease},
+    dhcp::{self, Ipv4Range, Lease},
     message::Message,
     peer::{self, HandshakeError, JoinSuccess, Peer},
     ThreadJoin,
@@ -98,7 +98,7 @@ impl Server {
     ) -> Result<(), Error> {
         // Create main thread channel
         let (tx, server_rx) = mpsc::channel();
-        let dhcp_service = dhcp::Service::new(config.dhcp_pool.clone());
+        let dhcp_service = dhcp::Service::new(config.dhcp_pool.clone(), config.lease_time);
         let thread_count = config.thread_count;
         console::log!("Starting with {} workers", thread_count);
         let mut server = Self {
@@ -421,15 +421,15 @@ impl Server {
             Message::Okay => self.handle_okay(sender_id, &message),
             Message::Coordinator => self.handle_coordinator(sender_id),
             Message::Lease(lease) => self.handle_add_lease(lease),
-            Message::SetPool(dhcp_pool) => self.handle_set_pool(dhcp_pool),
+            Message::SetPool(update) => self.handle_set_pool(update),
             Message::SetMajority(majority) => self.handle_majority(majority),
             _ => panic!("Server received unexpected {message:?} from {sender_id}"),
         };
     }
 
-    fn handle_set_pool(&mut self, dhcp_service: dhcp::Service) {
-        console::log!("Set pool to {}", dhcp_service.pool.range);
-        self.dhcp_service = dhcp_service;
+    fn handle_set_pool(&mut self, pool: Ipv4Range) {
+        console::log!("Set pool to {}", pool);
+        self.dhcp_service.set_pool(pool);
     }
 
     fn handle_election(&mut self, sender_id: peer::Id, message: &Message) {
@@ -570,7 +570,10 @@ impl Server {
         if let Message::Join(peer_id) = message {
             let result = Message::send(
                 &stream,
-                &Message::JoinAck(self.config.id, self.dhcp_service.leases.clone()),
+                &Message::JoinAck {
+                    peer_id: self.config.id,
+                    leases: self.dhcp_service.leases.clone(),
+                },
             );
             match result {
                 Ok(()) => {
@@ -692,26 +695,19 @@ impl Server {
             clippy::unwrap_used,
             reason = "Having more DHCP nodes than IPv4 addresses is nonsense"
         )]
-        let pools: Vec<_> = self
+        let pools = self
             .config
             .dhcp_pool
-            .divide(u32::try_from(self.peers.len()).unwrap() + 1)
-            .into_iter()
-            .map(|pool| dhcp::Service::new_with_leases(pool, &self.dhcp_service.leases))
-            .collect(); // +1 to account for the coordinator
+            // +1 to account for the coordinator
+            .divide(u32::try_from(self.peers.len()).unwrap() + 1);
 
-        let mut pools_iter = pools.iter();
+        let mut pools_iter = pools.into_iter();
 
         // Set own pool
-        self.handle_set_pool(
-            pools_iter
-                .next()
-                .expect("Pools should always exist")
-                .clone(),
-        );
+        self.handle_set_pool(pools_iter.next().expect("Pools should always exist"));
 
         for (pool, peer) in pools_iter.zip(self.peers.values()) {
-            peer.send_message(Message::SetPool(pool.clone()));
+            peer.send_message(Message::SetPool(pool));
         }
     }
 }

@@ -5,7 +5,7 @@
 //!
 //! Jump to [`Config::load_toml_file`] for configuration file loading.
 
-use crate::{dhcp, peer};
+use crate::{dhcp::Ipv4Range, peer};
 use serde::Deserialize;
 use std::{
     net::{Ipv4Addr, SocketAddr},
@@ -41,7 +41,8 @@ pub struct Config {
     pub heartbeat_timeout: Duration,
     pub peer_connection_timeout: Option<Duration>,
     pub prefix_length: u32,
-    pub dhcp_pool: dhcp::Pool,
+    pub dhcp_pool: Ipv4Range,
+    pub lease_time: Duration,
     pub dhcp_address: SocketAddr,
     pub thread_count: NonZero<usize>,
 }
@@ -70,7 +71,8 @@ impl From<File> for Config {
             id,
             heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
             prefix_length,
-            dhcp_pool: dhcp::Pool::from_cidr(net, prefix_length, Duration::from_secs(lease_time)),
+            dhcp_pool: Ipv4Range::from_cidr(net, prefix_length),
+            lease_time: Duration::from_secs(lease_time),
             dhcp_address,
             // Use thread count in config file if defined as > 0,
             // otherwise use thread::available_parallelism(),

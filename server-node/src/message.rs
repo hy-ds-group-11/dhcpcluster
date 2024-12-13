@@ -7,7 +7,7 @@
 //! Jump to [`Message`] for the server-to-server message definition.
 
 use crate::{
-    dhcp::{self, Lease},
+    dhcp::{Ipv4Range, Lease},
     peer,
 };
 use protocol::{RecvCbor, SendCbor};
@@ -17,14 +17,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Message {
     Join(peer::Id),
-    JoinAck(peer::Id, Vec<Lease>),
+    JoinAck {
+        peer_id: peer::Id,
+        leases: Vec<Lease>,
+    },
     Heartbeat,
     Election,
     Okay,
     Coordinator,
     Lease(Lease),
-    // TODO: this is BAD! Use dhcp::Pool and other required parameters, not service internals
-    SetPool(dhcp::Service),
+    SetPool(Ipv4Range),
     SetMajority(bool),
 }
 

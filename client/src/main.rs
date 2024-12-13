@@ -9,7 +9,7 @@ use std::{
     io,
     iter::Peekable,
     net::{AddrParseError, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs},
-    num::ParseIntError,
+    num::{NonZero, ParseIntError},
     ops::Range,
     path::{Path, PathBuf},
     process::exit,
@@ -32,6 +32,7 @@ enum QueryTarget<'a> {
 }
 
 struct Query<'a> {
+    threads: Option<NonZero<usize>>,
     batch: QueryCount,
     target: QueryTarget<'a>,
     verbose: bool,
@@ -70,6 +71,7 @@ Supported commands:
     \x1b[32mquery\x1b[0m [\x1b[36mOPTION\x1b[0m]... [\x1b[36mSERVER\x1b[0m]
         \x1b[36mOPTION\x1b[0m:
             -n <N>           number of batch queries (default: 1)
+            -t <N>           number of threads to use (default: check conf)
             -v               print all responses even when batch querying
             -m <MAC_ADDRESS> specify MAC-address (otherwise randomized)
         \x1b[36mSERVER\x1b[0m: 
@@ -110,12 +112,17 @@ enum CommandParseError<'a> {
 
 impl<'a> Query<'a> {
     fn parse(mut args: &[&'a str]) -> Result<Self, CommandParseError<'a>> {
+        let mut threads = None;
         let mut batch = 1;
         let mut verbose = false;
         let mut mac_address = None;
 
         loop {
             match args {
+                ["-t", count, rest @ ..] => {
+                    threads = count.parse::<usize>()?.try_into().ok();
+                    args = rest;
+                }
                 ["-n", count, rest @ ..] => {
                     batch = count.parse()?;
                     args = rest;
@@ -142,6 +149,7 @@ impl<'a> Query<'a> {
         };
 
         Ok(Query {
+            threads,
             batch,
             target,
             verbose,
@@ -417,7 +425,18 @@ fn handle_query_command(
         QueryTarget::Arbitrary(host) => Some(host),
     };
 
-    let started_at = Instant::now();
+    // Set thread_pool size
+    if let Some(threads) = cmd.threads {
+        thread_pool
+            .set_size(threads)
+            .map_err(QueryExecutionError::ThreadPoolExecute)?;
+    } else {
+        thread_pool
+            .set_size(config.thread_count)
+            .map_err(QueryExecutionError::ThreadPoolExecute)?;
+    }
+
+    let start = Instant::now();
 
     let (tx, rx) = mpsc::channel();
     for _ in 0..cmd.batch {
@@ -442,6 +461,7 @@ fn handle_query_command(
         (0, true) => {
             // Easter egg :)
             println!("You found the optimal arguments.");
+            println!("Rate: Blazingly fast!!!");
         }
         (1, _) | (_, true) => {
             for res in rx {
@@ -479,17 +499,12 @@ fn handle_query_command(
                 println!("Max query time: {:.3?}", Duration::from_nanos(max_time));
             }
 
-            if cmd.batch == 0 {
-                println!("Rate: Blazingly fast!!!");
-            } else {
-                let time = started_at.elapsed();
-                println!(
-                    "Quer{} took {:.3?}, rate: {:.1}/s",
-                    if cmd.batch > 1 { "ies" } else { "y" },
-                    time,
-                    (successful as f64 / time.as_millis() as f64) * 1000.
-                );
-            }
+            let time = start.elapsed();
+            println!(
+                "Queries took {:.3?}, rate: {:.1} leases/s",
+                time,
+                (successful as f64 / time.as_millis() as f64) * 1000.
+            );
         }
     }
 

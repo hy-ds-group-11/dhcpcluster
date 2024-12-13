@@ -528,10 +528,10 @@ fn handle_query_command(
             }
 
             let time = start.elapsed();
+            let rate = (successful as f64 / time.as_nanos() as f64) * 10f64.powi(9);
             println!(
                 "Queries took \x1b[32m{:.3?}\x1b[0m, rate: \x1b[32m{:.1}\x1b[0m leases/s",
-                time,
-                (successful as f64 / time.as_millis() as f64) * 1000.
+                time, rate
             );
         }
     }

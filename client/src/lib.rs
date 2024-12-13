@@ -1,3 +1,7 @@
+#![deny(clippy::unwrap_used)]
+#![warn(clippy::perf, clippy::complexity, clippy::pedantic, clippy::suspicious)]
+#![allow(clippy::missing_errors_doc)]
+
 pub mod config;
 
 use protocol::{

@@ -3,7 +3,7 @@ use std::{num::NonZero, thread, time::Duration};
 use toml_config::TomlConfig;
 
 #[derive(Deserialize)]
-pub struct ConfigFile {
+pub struct File {
     servers: Vec<String>,
     default_port: u16,
     timeout: Option<u64>,
@@ -18,14 +18,14 @@ pub struct Config {
     pub thread_count: NonZero<usize>,
 }
 
-impl From<ConfigFile> for Config {
+impl From<File> for Config {
     fn from(
-        ConfigFile {
+        File {
             servers,
             default_port,
             timeout,
             thread_count,
-        }: ConfigFile,
+        }: File,
     ) -> Self {
         Self {
             servers,
@@ -35,10 +35,11 @@ impl From<ConfigFile> for Config {
             // otherwise use thread::available_parallelism(),
             // and if all else fails, use a default of 8
             thread_count: thread_count.and_then(NonZero::new).unwrap_or_else(|| {
+                #[allow(clippy::unwrap_used)]
                 thread::available_parallelism().unwrap_or(NonZero::new(8).unwrap())
             }),
         }
     }
 }
 
-impl TomlConfig<ConfigFile> for Config {}
+impl TomlConfig<File> for Config {}

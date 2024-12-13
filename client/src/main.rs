@@ -1,3 +1,7 @@
+#![deny(clippy::unwrap_used)]
+#![warn(clippy::perf, clippy::complexity, clippy::pedantic, clippy::suspicious)]
+#![allow(clippy::missing_errors_doc, clippy::cast_precision_loss)]
+
 use client::{config::Config, CommunicationError};
 use protocol::{DhcpOffer, MacAddr, MacAddrParseError};
 use rand::Rng;
@@ -309,11 +313,10 @@ fn query(
                         server: server.to_owned(),
                         time: start.elapsed(),
                     });
-                } else {
-                    return Err(QueryError::RequestNack {
-                        server: server.to_owned(),
-                    });
                 }
+                return Err(QueryError::RequestNack {
+                    server: server.to_owned(),
+                });
             }
             Ok(None) => {
                 return Err(QueryError::DiscoverNack {
@@ -363,11 +366,10 @@ fn renew(
                         server: server.to_owned(),
                         time: start.elapsed(),
                     });
-                } else {
-                    return Err(QueryError::RequestNack {
-                        server: server.to_owned(),
-                    });
                 }
+                return Err(QueryError::RequestNack {
+                    server: server.to_owned(),
+                });
             }
         }
     }
@@ -413,13 +415,13 @@ enum QueryExecutionError {
 }
 
 fn handle_query_command(
-    cmd: Query,
+    cmd: &Query,
     config: &Config,
     thread_pool: &ThreadPool,
 ) -> Result<(), QueryExecutionError> {
     let server = match cmd.target {
         QueryTarget::Random => None,
-        QueryTarget::Specific(i) => Some(config.servers.get(i).map(|s| s.as_str()).ok_or(
+        QueryTarget::Specific(i) => Some(config.servers.get(i).map(String::as_str).ok_or(
             QueryExecutionError::InvalidServerIndex(i, 0..config.servers.len()),
         )?),
         QueryTarget::Arbitrary(host) => Some(host),
@@ -508,7 +510,7 @@ fn handle_query_command(
                 println!(
                     "Avg query time: \x1b[32m{:.3?}\x1b[0m",
                     Duration::from_nanos(sum / count)
-                )
+                );
             }
             if let Some(max_time) = query_times_nanos().max() {
                 println!(
@@ -529,10 +531,10 @@ fn handle_query_command(
     Ok(())
 }
 
-fn handle_renew_command(cmd: Renew, config: &Config) -> Result<(), QueryExecutionError> {
+fn handle_renew_command(cmd: &Renew, config: &Config) -> Result<(), QueryExecutionError> {
     let server = match cmd.target {
         QueryTarget::Random => random_server(config),
-        QueryTarget::Specific(i) => config.servers.get(i).map(|s| s.as_str()).ok_or(
+        QueryTarget::Specific(i) => config.servers.get(i).map(String::as_str).ok_or(
             QueryExecutionError::InvalidServerIndex(i, 0..config.servers.len()),
         )?,
         QueryTarget::Arbitrary(host) => host,
@@ -582,10 +584,10 @@ fn main() -> Result<(), ReadlineError> {
             // Try both &str and String, I don't know which type panic messages will occur in
             if let Some(msg) = msg
                 .downcast_ref::<&str>()
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .or(msg.downcast_ref::<String>().cloned())
             {
-                eprintln!("{}", msg);
+                eprintln!("{msg}");
             }
         }),
     ) {
@@ -605,19 +607,20 @@ fn main() -> Result<(), ReadlineError> {
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;
-                use Command::*;
                 match parse_command(&line) {
-                    Ok(Nop) => {}
-                    Ok(Quit) => break,
-                    Ok(Query(query)) => handle_query_command(query, &config, &thread_pool)
-                        .unwrap_or_else(|e| print_error(&e)),
-                    Ok(Renew(renew)) => {
-                        handle_renew_command(renew, &config).unwrap_or_else(|e| print_error(&e))
+                    Ok(Command::Nop) => {}
+                    Ok(Command::Quit) => break,
+                    Ok(Command::Query(query)) => {
+                        handle_query_command(&query, &config, &thread_pool)
+                            .unwrap_or_else(|e| print_error(&e));
                     }
-                    Ok(GenerateMac) => println!("{}", random_mac_addr()),
-                    Ok(List) => list(&config),
-                    Ok(Conf) => println!("\x1b[32m{config:#?}\x1b[0m"),
-                    Ok(Help) => help(),
+                    Ok(Command::Renew(renew)) => {
+                        handle_renew_command(&renew, &config).unwrap_or_else(|e| print_error(&e));
+                    }
+                    Ok(Command::GenerateMac) => println!("{}", random_mac_addr()),
+                    Ok(Command::List) => list(&config),
+                    Ok(Command::Conf) => println!("\x1b[32m{config:#?}\x1b[0m"),
+                    Ok(Command::Help) => help(),
                     Err(e) => print_error(&e),
                 }
             }

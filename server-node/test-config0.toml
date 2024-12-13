@@ -3,6 +3,6 @@ id = 0
 peers = [[1, "0.0.0.0:1235"], [2, "0.0.0.0:1236"]]
 heartbeat_timeout = 2000
 net = "10.0.0.0"
-prefix_length = 24
+prefix_length = 8
 lease_time = 3600
 dhcp_address = "127.0.1.1:4321"

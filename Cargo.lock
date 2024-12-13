@@ -62,6 +62,7 @@ dependencies = [
  "rustyline",
  "serde",
  "thiserror",
+ "thread-pool",
  "toml-config",
 ]
 

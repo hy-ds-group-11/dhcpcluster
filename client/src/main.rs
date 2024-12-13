@@ -3,6 +3,7 @@ use protocol::{DhcpOffer, MacAddr, MacAddrParseError};
 use rand::Rng;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
+    any::Any,
     error::Error,
     fmt::Display,
     io,
@@ -13,10 +14,12 @@ use std::{
     path::{Path, PathBuf},
     process::exit,
     str::FromStr,
+    sync::mpsc,
     time::{Duration, Instant},
     vec::IntoIter,
 };
 use thiserror::Error;
+use thread_pool::ThreadPool;
 use toml_config::TomlConfig;
 
 type ServerIndex = usize;
@@ -205,37 +208,40 @@ fn random_mac_addr() -> MacAddr {
 }
 
 #[derive(Error, Debug)]
-enum QueryError<'a> {
+enum QueryError {
     #[error("Name resolution failed for {server}")]
-    NameResolution { server: &'a str, source: io::Error },
+    NameResolution { server: String, source: io::Error },
     #[error("Failed to set socket timeout")]
     SetSocketTimeout(#[source] io::Error),
     #[error("Failed to establish a connection to {server}")]
-    Connect { server: &'a str, source: io::Error },
+    Connect { server: String, source: io::Error },
     #[error("The server name {server} resolved to 0 addresses, can't reach server")]
-    UnreachableServer { server: &'a str },
+    UnreachableServer { server: String },
     #[error("Communication with {server} failed")]
     Communication {
-        server: &'a str,
+        server: String,
         source: CommunicationError,
     },
     #[error("Server {server} replied to Request with Nack")]
-    RequestNack { server: &'a str },
+    RequestNack { server: String },
     #[error("Server {server} replied to Discover with Nack")]
-    DiscoverNack { server: &'a str },
+    DiscoverNack { server: String },
 }
 
-fn connect_timeout<'a>(
+fn connect_timeout(
     addr: &SocketAddr,
     timeout: Option<Duration>,
-    server: &'a str,
-) -> Result<TcpStream, QueryError<'a>> {
+    server: &str,
+) -> Result<TcpStream, QueryError> {
     let stream = if let Some(timeout) = timeout {
         TcpStream::connect_timeout(addr, timeout)
     } else {
         TcpStream::connect(addr)
     }
-    .map_err(|e| QueryError::Connect { server, source: e })?;
+    .map_err(|e| QueryError::Connect {
+        server: server.to_owned(),
+        source: e,
+    })?;
     stream
         .set_read_timeout(timeout)
         .map_err(QueryError::SetSocketTimeout)?;
@@ -245,13 +251,13 @@ fn connect_timeout<'a>(
     Ok(stream)
 }
 
-struct QuerySuccess<'a> {
+struct QuerySuccess {
     offer: DhcpOffer,
-    server: &'a str,
+    server: String,
     time: Duration,
 }
 
-impl Display for QuerySuccess<'_> {
+impl Display for QuerySuccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -276,25 +282,41 @@ fn query(
         match client::get_offer(&stream, mac_address) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
-                None => return Err(QueryError::Communication { server, source: e }),
+                None => {
+                    return Err(QueryError::Communication {
+                        server: server.to_owned(),
+                        source: e,
+                    })
+                }
             },
             Ok(Some(offer @ DhcpOffer { ip, .. })) => {
-                if client::get_ack(&stream, mac_address, ip)
-                    .map_err(|e| QueryError::Communication { server, source: e })?
-                {
+                if client::get_ack(&stream, mac_address, ip).map_err(|e| {
+                    QueryError::Communication {
+                        server: server.to_owned(),
+                        source: e,
+                    }
+                })? {
                     return Ok(QuerySuccess {
                         offer,
-                        server,
+                        server: server.to_owned(),
                         time: start.elapsed(),
                     });
                 } else {
-                    return Err(QueryError::RequestNack { server });
+                    return Err(QueryError::RequestNack {
+                        server: server.to_owned(),
+                    });
                 }
             }
-            Ok(None) => return Err(QueryError::DiscoverNack { server }),
+            Ok(None) => {
+                return Err(QueryError::DiscoverNack {
+                    server: server.to_owned(),
+                })
+            }
         }
     }
-    Err(QueryError::UnreachableServer { server })
+    Err(QueryError::UnreachableServer {
+        server: server.to_owned(),
+    })
 }
 
 fn renew(
@@ -313,7 +335,12 @@ fn renew(
         match client::get_ack(&stream, mac_address, ip_address) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
-                None => return Err(QueryError::Communication { server, source: e }),
+                None => {
+                    return Err(QueryError::Communication {
+                        server: server.to_owned(),
+                        source: e,
+                    })
+                }
             },
             Ok(acked) =>
             // TODO: offer TTL and subnet mask are incorrect;
@@ -325,16 +352,20 @@ fn renew(
                             lease_time: 3600,
                             subnet_mask: 24,
                         },
-                        server,
+                        server: server.to_owned(),
                         time: start.elapsed(),
                     });
                 } else {
-                    return Err(QueryError::RequestNack { server });
+                    return Err(QueryError::RequestNack {
+                        server: server.to_owned(),
+                    });
                 }
             }
         }
     }
-    Err(QueryError::UnreachableServer { server })
+    Err(QueryError::UnreachableServer {
+        server: server.to_owned(),
+    })
 }
 
 /// Resolve server name, try server itself first
@@ -347,11 +378,17 @@ fn get_addresses(
         Err(e) => {
             // If the server name did not contain port number, try with default port number
             if e.kind() == std::io::ErrorKind::InvalidInput {
-                (server, default_port)
-                    .to_socket_addrs()
-                    .map_err(|e| QueryError::NameResolution { server, source: e })?
+                (server, default_port).to_socket_addrs().map_err(|e| {
+                    QueryError::NameResolution {
+                        server: server.to_owned(),
+                        source: e,
+                    }
+                })?
             } else {
-                return Err(QueryError::NameResolution { server, source: e });
+                return Err(QueryError::NameResolution {
+                    server: server.to_owned(),
+                    source: e,
+                });
             }
         }
     }
@@ -363,11 +400,15 @@ fn get_addresses(
 enum QueryExecutionError {
     #[error("Invalid server index {0}, expected {1:?}")]
     InvalidServerIndex(usize, Range<usize>),
+    #[error("Failed to spawn worker threads")]
+    ThreadPoolExecute(#[source] io::Error),
 }
 
-fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutionError> {
-    let mut results = Vec::new();
-
+fn handle_query_command(
+    cmd: Query,
+    config: &Config,
+    thread_pool: &ThreadPool,
+) -> Result<(), QueryExecutionError> {
     let server = match cmd.target {
         QueryTarget::Random => None,
         QueryTarget::Specific(i) => Some(config.servers.get(i).map(|s| s.as_str()).ok_or(
@@ -376,13 +417,26 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
         QueryTarget::Arbitrary(host) => Some(host),
     };
 
+    let started_at = Instant::now();
+
+    let (tx, rx) = mpsc::channel();
     for _ in 0..cmd.batch {
-        let server = server.unwrap_or_else(|| random_server(config));
+        let default_port = config.default_port;
+        let timeout = config.timeout;
+        let server = server.unwrap_or_else(|| random_server(config)).to_owned();
         let mac_address = cmd.mac_address.unwrap_or_else(random_mac_addr);
 
-        let res = query(server, config.default_port, config.timeout, mac_address);
-        results.push(res);
+        let tx = tx.clone();
+        thread_pool
+            .execute(move || {
+                tx.send(query(&server, default_port, timeout, mac_address))
+                    .expect(
+                    "Invariant violated: channel dropped before query command execution finished",
+                );
+            })
+            .map_err(QueryExecutionError::ThreadPoolExecute)?;
     }
+    drop(tx);
 
     match (cmd.batch, cmd.verbose) {
         (0, true) => {
@@ -390,7 +444,7 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
             println!("You found the optimal arguments.");
         }
         (1, _) | (_, true) => {
-            for res in results {
+            for res in rx {
                 match res {
                     Ok(success) => println!("{success}"),
                     Err(e) => print_error(&e),
@@ -398,11 +452,10 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
             }
         }
         _ => {
-            println!(
-                "Successful: {} / {}",
-                results.iter().filter(|res| res.is_ok()).count(),
-                cmd.batch
-            );
+            let results: Vec<_> = rx.into_iter().collect();
+            let successful = results.iter().filter(|res| res.is_ok()).count();
+
+            println!("Successful: {} / {}", successful, cmd.batch);
 
             // Define helper closure to clean up redundant iterator chains
             let query_times_nanos = || {
@@ -424,6 +477,18 @@ fn handle_query_command(cmd: Query, config: &Config) -> Result<(), QueryExecutio
             }
             if let Some(max_time) = query_times_nanos().max() {
                 println!("Max query time: {:.3?}", Duration::from_nanos(max_time));
+            }
+
+            if cmd.batch == 0 {
+                println!("Rate: Blazingly fast!!!");
+            } else {
+                let time = started_at.elapsed();
+                println!(
+                    "Quer{} took {:.3?}, rate: {:.1}/s",
+                    if cmd.batch > 1 { "ies" } else { "y" },
+                    time,
+                    (successful as f64 / time.as_millis() as f64) * 1000.
+                );
             }
         }
     }
@@ -477,6 +542,27 @@ fn main() -> Result<(), ReadlineError> {
         }
     };
 
+    let thread_pool = match ThreadPool::new(
+        config.thread_count,
+        Box::new(|worker_id: usize, msg: Box<dyn Any>| {
+            eprintln!("Worker {worker_id} panicked");
+            // Try both &str and String, I don't know which type panic messages will occur in
+            if let Some(msg) = msg
+                .downcast_ref::<&str>()
+                .map(|s| s.to_string())
+                .or(msg.downcast_ref::<String>().cloned())
+            {
+                eprintln!("{}", msg);
+            }
+        }),
+    ) {
+        Ok(pool) => pool,
+        Err(e) => {
+            print_error(&e);
+            exit(2);
+        }
+    };
+
     list(&config);
     help();
 
@@ -490,9 +576,8 @@ fn main() -> Result<(), ReadlineError> {
                 match parse_command(&line) {
                     Ok(Nop) => {}
                     Ok(Quit) => break,
-                    Ok(Query(query)) => {
-                        handle_query_command(query, &config).unwrap_or_else(|e| print_error(&e))
-                    }
+                    Ok(Query(query)) => handle_query_command(query, &config, &thread_pool)
+                        .unwrap_or_else(|e| print_error(&e)),
                     Ok(Renew(renew)) => {
                         handle_renew_command(renew, &config).unwrap_or_else(|e| print_error(&e))
                     }

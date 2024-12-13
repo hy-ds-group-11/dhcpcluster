@@ -8,6 +8,7 @@ edition = "2021"
 [dependencies]
 protocol = { path = "../protocol" }
 toml-config = { path = "../toml-config" }
+thread-pool = { path = "../thread-pool" }
 rand = "0.8.5"
 rustyline = { version = "15.0.0", default-features = false }
 serde = { version = "1.0.215", features = ["derive"] }

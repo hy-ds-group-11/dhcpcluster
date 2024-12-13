@@ -1,3 +1,15 @@
+#![deny(clippy::unwrap_used, clippy::allow_attributes_without_reason)]
+#![warn(clippy::perf, clippy::complexity, clippy::pedantic, clippy::suspicious)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    reason = "We're not going to write comprehensive docs"
+)]
+#![allow(
+    clippy::cast_precision_loss,
+    reason = "There are no sufficient floating point types"
+)]
+
 use serde::de::DeserializeOwned;
 use std::{
     ffi::OsStr,

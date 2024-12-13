@@ -1,3 +1,15 @@
+#![deny(clippy::unwrap_used, clippy::allow_attributes_without_reason)]
+#![warn(clippy::perf, clippy::complexity, clippy::pedantic, clippy::suspicious)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    reason = "We're not going to write comprehensive docs"
+)]
+#![allow(
+    clippy::cast_precision_loss,
+    reason = "There are no sufficient floating point types"
+)]
+
 //! This crate defines a custom client-server (relay agent to cluster) protocol.
 //! In a final version of this software, this protocol should be replaced by the actual DHCP protocol.
 
@@ -35,7 +47,7 @@ impl FromStr for MacAddr {
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         let mut bytes = [0; 6];
-        let mut split = value.split(":");
+        let mut split = value.split(':');
         for (i, byte) in bytes.iter_mut().enumerate() {
             match split.next() {
                 Some(octet) => {
@@ -61,7 +73,7 @@ impl FromStr for MacAddr {
 impl Display for MacAddr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for byte in self.0.iter().take(5) {
-            write!(f, "{:0>2X}:", byte)?;
+            write!(f, "{byte:0>2X}:")?;
         }
         write!(f, "{:0>2X}", self.0[5])
     }

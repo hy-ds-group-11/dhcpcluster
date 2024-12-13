@@ -1,3 +1,15 @@
+#![deny(clippy::unwrap_used, clippy::allow_attributes_without_reason)]
+#![warn(clippy::perf, clippy::complexity, clippy::pedantic, clippy::suspicious)]
+#![allow(
+    clippy::missing_errors_doc,
+    clippy::missing_panics_doc,
+    reason = "We're not going to write comprehensive docs"
+)]
+#![allow(
+    clippy::cast_precision_loss,
+    reason = "There are no sufficient floating point types"
+)]
+
 //! # DHCP Cluster - Server Implementation
 //!
 //! This crate contains a distributed DHCP server implementation, with a custom protocol between nodes.
@@ -32,7 +44,7 @@ pub trait ThreadJoin: Sized {
             console::warning!("Thread {name} panicked");
             if let Some(msg) = msg
                 .downcast_ref::<&str>()
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
                 .or(msg.downcast_ref::<String>().cloned())
             {
                 console::warning!("{}", msg);
@@ -43,7 +55,7 @@ pub trait ThreadJoin: Sized {
 
 impl ThreadJoin for JoinHandle<()> {
     fn join(self) -> thread::Result<()> {
-        self.join()
+        JoinHandle::join(self)
     }
 
     fn name(&self) -> String {

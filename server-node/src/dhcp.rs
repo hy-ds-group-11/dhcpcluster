@@ -2,9 +2,7 @@ use protocol::MacAddr;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
-    iter,
     net::Ipv4Addr,
-    ops::Range,
     time::{Duration, SystemTime},
 };
 use thiserror::Error;
@@ -13,7 +11,7 @@ use thiserror::Error;
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Lease {
     pub hardware_address: MacAddr,    // Assume MAC address
-    pub lease_address: Ipv4Addr,      // Assume IPv4 for now
+    pub address: Ipv4Addr,            // Assume IPv4 for now
     pub expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
 }
 
@@ -44,7 +42,7 @@ impl Ipv4Range {
         self.end - self.start
     }
 
-    fn iter_starting_at(&self, at: u32) -> iter::Chain<Range<u32>, Range<u32>> {
+    fn iter_starting_at(&self, at: u32) -> impl Iterator<Item = u32> {
         (at..self.end).chain(self.start..at)
     }
 }
@@ -59,61 +57,81 @@ pub enum CommitError {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct DhcpService {
+pub struct Pool {
     pub range: Ipv4Range,
     pub lease_time: Duration,
-    pub leases: Vec<Lease>,
-    pub pending_leases: Vec<Lease>,
-    next_candidate_address: u32,
 }
 
-impl DhcpService {
-    pub fn new_with_leases(start: u32, end: u32, lease_time: Duration, leases: &[Lease]) -> Self {
+impl Pool {
+    #[must_use]
+    pub fn new(start: u32, end: u32, lease_time: Duration) -> Self {
         Self {
             range: Ipv4Range::new(start, end),
             lease_time,
-            leases: leases.into(),
-            pending_leases: Vec::new(),
-            next_candidate_address: start,
         }
     }
 
-    pub fn new(start: u32, end: u32, lease_time: Duration) -> Self {
-        Self::new_with_leases(start, end, lease_time, &[])
-    }
-
+    #[must_use]
     pub fn from_cidr(ip_address: Ipv4Addr, prefix_length: u32, lease_time: Duration) -> Self {
         let start = ip_address.to_bits();
         let end = start + 2_u32.pow(32 - prefix_length) - 1;
         Self::new(start, end, lease_time)
     }
 
-    pub fn divide(&self, parts: u32, leases: &[Lease]) -> Vec<DhcpService> {
+    #[must_use]
+    pub fn divide(&self, parts: u32) -> Vec<Self> {
         let diff = self.range.len();
         let pool_size = diff / parts;
-        let mut pools = Vec::new();
+        let mut pools = Vec::with_capacity(parts as usize);
 
         for i in 0..parts {
-            pools.push(DhcpService::new_with_leases(
+            pools.push(Self::new(
                 self.range.start + i * pool_size,
                 self.range.start + (i + 1) * pool_size,
                 self.lease_time,
-                leases,
-            ))
+            ));
         }
         pools[parts as usize - 1].range.end += diff % parts;
+
         pools
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct Service {
+    pub pool: Pool,
+    pub leases: Vec<Lease>,
+    pub pending_leases: Vec<Lease>,
+    next_candidate_address: u32,
+}
+
+impl Service {
+    #[must_use]
+    pub fn new_with_leases(pool: Pool, leases: &[Lease]) -> Self {
+        let next_candidate_address = pool.range.start;
+        Self {
+            pool,
+            leases: leases.into(),
+            pending_leases: Vec::new(),
+            next_candidate_address,
+        }
+    }
+
+    #[must_use]
+    pub fn new(pool: Pool) -> Self {
+        Self::new_with_leases(pool, &[])
     }
 
     fn fresh_timestamp(&self) -> SystemTime {
-        SystemTime::now().checked_add(self.lease_time).unwrap()
+        SystemTime::now()
+            .checked_add(self.pool.lease_time)
+            .expect("Time overflow")
     }
 
     pub fn add_lease(&mut self, new_lease: Lease) {
         // TODO: do some sanity checks
         if let Some(lease) = self.leases.iter_mut().find(|l| {
-            l.hardware_address == new_lease.hardware_address
-                && l.lease_address == new_lease.lease_address
+            l.hardware_address == new_lease.hardware_address && l.address == new_lease.address
         }) {
             lease.expiry_timestamp = new_lease.expiry_timestamp;
         } else {
@@ -138,13 +156,17 @@ impl DhcpService {
 
         // First check a range starting from the last address given
         // Fall back to checking from the start of the full range
-        for ip_addr in self.range.iter_starting_at(self.next_candidate_address) {
+        for ip_addr in self
+            .pool
+            .range
+            .iter_starting_at(self.next_candidate_address)
+        {
             // TODO: Use HashMap or other more efficient collection
             if self
                 .leases
                 .iter()
                 .chain(self.pending_leases.iter())
-                .any(|l| l.lease_address.to_bits() == ip_addr)
+                .any(|l| l.address.to_bits() == ip_addr)
             {
                 continue;
             }
@@ -155,7 +177,7 @@ impl DhcpService {
 
             let lease = Lease {
                 hardware_address: mac_address,
-                lease_address: Ipv4Addr::from_bits(ip_addr),
+                address: Ipv4Addr::from_bits(ip_addr),
                 expiry_timestamp: self.fresh_timestamp(),
             };
             self.pending_leases.push(lease.clone());
@@ -174,7 +196,7 @@ impl DhcpService {
         if let Some(pending_index) = self
             .pending_leases
             .iter()
-            .position(|l| l.hardware_address == mac_addr && l.lease_address == ip_addr)
+            .position(|l| l.hardware_address == mac_addr && l.address == ip_addr)
         {
             let mut lease = self.pending_leases.remove(pending_index);
             lease.expiry_timestamp = fresh_timestamp;
@@ -183,7 +205,7 @@ impl DhcpService {
         } else if let Some(lease) = self
             .leases
             .iter_mut()
-            .find(|l| l.hardware_address == mac_addr && l.lease_address == ip_addr)
+            .find(|l| l.hardware_address == mac_addr && l.address == ip_addr)
         {
             lease.expiry_timestamp = fresh_timestamp;
             return Ok(lease.clone());
@@ -194,21 +216,17 @@ impl DhcpService {
 
 impl Display for Lease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "MAC {} has IP {}",
-            self.hardware_address, self.lease_address,
-        )?;
+        write!(f, "MAC {} has IP {}", self.hardware_address, self.address,)?;
         if let Ok(dur) = self.expiry_timestamp.duration_since(SystemTime::now()) {
-            write!(f, ", expiring in {:<9.0?}", dur)?;
+            write!(f, ", expiring in {dur:<9.0?}")?;
         }
         Ok(())
     }
 }
 
-impl Display for DhcpService {
+impl Display for Service {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{}", self.range)?;
+        writeln!(f, "{}", self.pool.range)?;
         if !self.leases.is_empty() {
             writeln!(f)?;
         }

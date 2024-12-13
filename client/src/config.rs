@@ -35,7 +35,7 @@ impl From<File> for Config {
             // otherwise use thread::available_parallelism(),
             // and if all else fails, use a default of 8
             thread_count: thread_count.and_then(NonZero::new).unwrap_or_else(|| {
-                #[allow(clippy::unwrap_used)]
+                #[allow(clippy::unwrap_used, reason = "Default thread count from literal")]
                 thread::available_parallelism().unwrap_or(NonZero::new(8).unwrap())
             }),
         }

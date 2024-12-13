@@ -1,5 +1,6 @@
 use std::{
     any::Any,
+    error::Error,
     io,
     num::NonZero,
     sync::{
@@ -10,7 +11,10 @@ use std::{
 };
 
 type PanicHandler = Box<dyn Fn(usize, Box<dyn Any>) + Send + Sync>;
-type Job = Box<dyn FnOnce() + Send + 'static>;
+enum Job {
+    Quit,
+    Execute(Box<dyn FnOnce() + Send + 'static>),
+}
 type Rx = Arc<Mutex<Receiver<Job>>>;
 type Tx = Sender<Job>;
 
@@ -25,6 +29,10 @@ struct Inner {
     next_id: usize,
     rx: Option<Rx>,
     tx: Option<Tx>,
+}
+
+fn new_poison_err(_: impl Error) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "ThreadPool lock poisoned")
 }
 
 impl ThreadPool {
@@ -57,6 +65,23 @@ impl ThreadPool {
         })
     }
 
+    pub fn execute<F>(&self, f: F) -> io::Result<()>
+    where
+        F: FnOnce() + Send + 'static,
+    {
+        self.inner.write().map_err(new_poison_err)?.respawn()?;
+        self.execute_unchecked(f)
+    }
+
+    pub fn set_size(&self, size: NonZero<usize>) -> io::Result<isize> {
+        self.inner.write().map_err(new_poison_err)?.set_size(size)
+    }
+
+    pub fn size(&self) -> io::Result<usize> {
+        let size = self.inner.read().map_err(new_poison_err)?.size;
+        Ok(size)
+    }
+
     fn execute_unchecked<F>(&self, f: F) -> io::Result<()>
     where
         F: FnOnce() + Send + 'static,
@@ -64,24 +89,13 @@ impl ThreadPool {
         let job = Box::new(f);
         self.inner
             .read()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "ThreadPool lock poisoned"))?
+            .map_err(new_poison_err)?
             .tx
             .as_ref()
             .expect("Invariant violated: sender should exist before ThreadPool::drop")
-            .send(job)
+            .send(Job::Execute(job))
             .expect("Invariant violated: channel should always function before ThreadPool::drop");
         Ok(())
-    }
-
-    pub fn execute<F>(&self, f: F) -> io::Result<()>
-    where
-        F: FnOnce() + Send + 'static,
-    {
-        self.inner
-            .write()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "ThreadPool lock poisoned"))?
-            .respawn()?;
-        self.execute_unchecked(f)
     }
 }
 
@@ -110,7 +124,7 @@ impl Inner {
         }
 
         // Spawn new workers up to missing
-        let need = self.size - self.workers.len();
+        let need = self.size.saturating_sub(self.workers.len());
         for _ in 0..need {
             self.workers.push(Worker::new(
                 self.next_id,
@@ -124,6 +138,31 @@ impl Inner {
         }
 
         Ok(())
+    }
+
+    fn set_size(&mut self, size: NonZero<usize>) -> io::Result<isize> {
+        let size: usize = size.into();
+        let diff = size as isize - self.size as isize;
+
+        // Stop extra workers
+        if diff < 0 {
+            for _ in 0..diff.abs() {
+                self
+                    .tx
+                    .as_ref()
+                    .expect("Invariant violated: sender should exist before ThreadPool::drop")
+                    .send(Job::Quit)
+                    .expect("Invariant violated: channel should always function before ThreadPool::drop");
+            }
+        }
+
+        // Update size
+        self.size = size;
+
+        // Join old workers and spawn new workers if needed
+        self.respawn()?;
+
+        Ok(diff)
     }
 }
 
@@ -158,8 +197,8 @@ impl Worker {
                 }
                 .recv();
                 match message {
-                    Ok(job) => job(),
-                    Err(RecvError { .. }) => break,
+                    Ok(Job::Execute(job)) => job(),
+                    Ok(Job::Quit) | Err(RecvError { .. }) => break,
                 }
             })?;
 
@@ -191,57 +230,60 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn partition_booleans() {
-        let bools = [true, true, false, false, false, false, false, false];
-        assert_eq!(bools.partition_point(|&b| b), 2);
-        let bools = [true, false, false, false, false, false, false, false];
-        assert_eq!(bools.partition_point(|&b| b), 1);
+    fn new(size: usize) -> ThreadPool {
+        ThreadPool::new(size.try_into().unwrap(), |_, _| {}).unwrap()
+    }
+
+    fn inner(pool: &ThreadPool) -> std::sync::RwLockReadGuard<'_, Inner> {
+        pool.inner.read().unwrap()
+    }
+
+    fn inner_mut(pool: &ThreadPool) -> std::sync::RwLockWriteGuard<'_, Inner> {
+        pool.inner.write().unwrap()
+    }
+
+    fn wait() {
+        std::thread::sleep(Duration::from_secs(1));
+    }
+
+    fn partition(pool: ThreadPool, quit: usize) -> ThreadPool {
+        let (i, n) = {
+            let i = inner_mut(&pool).partition_quit_workers();
+            (i, inner(&pool).workers.len())
+        };
+
+        for worker in inner(&pool).workers.iter() {
+            println!("{}: {}", worker.id, worker.has_quit());
+        }
+        println!();
+
+        assert_eq!(i, n - quit);
+        {
+            let mut pool = inner_mut(&pool);
+            let quit_workers = pool.workers.split_off(i);
+            for worker in &quit_workers {
+                assert!(worker.has_quit());
+            }
+            assert_eq!(quit_workers.len(), quit);
+            for worker in &pool.workers {
+                assert!(!worker.has_quit());
+            }
+        }
+        pool
     }
 
     #[test]
     fn partitioning_logic() {
-        let pool = ThreadPool::new(8.try_into().unwrap(), |_, _| {}).unwrap();
-
-        let i = pool.inner.write().unwrap().partition_quit_workers();
-
-        for worker in pool.inner.read().unwrap().workers.iter() {
-            println!("{}: {}", worker.id, worker.has_quit());
-        }
-        println!();
-        assert_eq!(i, 8);
-
-        {
-            let mut pool = pool.inner.write().unwrap();
-            let quit_workers = pool.workers.split_off(i);
-            assert!(quit_workers.is_empty());
-        }
+        let pool = new(8);
+        let pool = partition(pool, 0);
 
         pool.execute_unchecked(|| {
             panic!();
         })
         .unwrap();
-        thread::sleep(Duration::from_secs(1));
+        wait();
 
-        let i = pool.inner.write().unwrap().partition_quit_workers();
-
-        for worker in pool.inner.read().unwrap().workers.iter() {
-            println!("{}: {}", worker.id, worker.has_quit());
-        }
-        println!();
-
-        assert_eq!(i, 7);
-        {
-            let mut pool = pool.inner.write().unwrap();
-            let quit_workers = pool.workers.split_off(i);
-            for worker in &quit_workers {
-                assert!(worker.has_quit());
-            }
-            assert_eq!(quit_workers.len(), 1);
-            for worker in &pool.workers {
-                assert!(!worker.has_quit());
-            }
-        }
+        let pool = partition(pool, 1);
 
         for _ in 0..3 {
             pool.execute_unchecked(|| {
@@ -249,26 +291,84 @@ mod tests {
             })
             .unwrap();
         }
-        thread::sleep(Duration::from_secs(1));
+        wait();
 
-        let i = pool.inner.write().unwrap().partition_quit_workers();
+        partition(pool, 3);
+    }
 
-        for worker in pool.inner.read().unwrap().workers.iter() {
-            println!("{}: {}", worker.id, worker.has_quit());
-        }
-        println!();
+    #[test]
+    fn grow() {
+        let pool = new(1);
+        assert_eq!(pool.size().unwrap(), 1);
+        assert_eq!(inner(&pool).workers.len(), 1);
 
-        assert_eq!(i, 4);
-        {
-            let mut pool = pool.inner.write().unwrap();
-            let quit_workers = pool.workers.split_off(i);
-            for worker in &quit_workers {
-                assert!(worker.has_quit());
-            }
-            assert_eq!(quit_workers.len(), 3);
-            for worker in &pool.workers {
-                assert!(!worker.has_quit());
-            }
-        }
+        let diff = pool.set_size(10.try_into().unwrap()).unwrap();
+        assert_eq!(diff, 9);
+        assert_eq!(pool.size().unwrap(), 10);
+        assert_eq!(inner(&pool).workers.len(), 10);
+
+        let diff = pool.set_size(32.try_into().unwrap()).unwrap();
+        assert_eq!(diff, 22);
+        assert_eq!(pool.size().unwrap(), 32);
+        assert_eq!(inner(&pool).workers.len(), 32);
+    }
+
+    #[test]
+    fn shrink() {
+        let pool = new(40);
+        assert_eq!(pool.size().unwrap(), 40);
+        assert_eq!(inner(&pool).workers.len(), 40);
+
+        let diff = pool.set_size(10.try_into().unwrap()).unwrap();
+        assert_eq!(diff, -30);
+        assert_eq!(pool.size().unwrap(), 10);
+        wait();
+        inner_mut(&pool).respawn().unwrap();
+        assert_eq!(inner(&pool).workers.len(), 10);
+
+        let diff = pool.set_size(3.try_into().unwrap()).unwrap();
+        assert_eq!(diff, -7);
+        assert_eq!(pool.size().unwrap(), 3);
+        wait();
+        inner_mut(&pool).respawn().unwrap();
+        assert_eq!(inner(&pool).workers.len(), 3);
+    }
+
+    #[test]
+    fn ping_pong() {
+        let pool = new(2);
+        assert_eq!(pool.size().unwrap(), 2);
+        assert_eq!(inner(&pool).workers.len(), 2);
+
+        let diff = pool.set_size(10.try_into().unwrap()).unwrap();
+        assert_eq!(diff, 8);
+        assert_eq!(pool.size().unwrap(), 10);
+        wait();
+        assert_eq!(inner(&pool).workers.len(), 10);
+
+        let diff = pool.set_size(32.try_into().unwrap()).unwrap();
+        assert_eq!(diff, 22);
+        assert_eq!(pool.size().unwrap(), 32);
+        wait();
+        assert_eq!(inner(&pool).workers.len(), 32);
+
+        let diff = pool.set_size(16.try_into().unwrap()).unwrap();
+        assert_eq!(diff, -16);
+        assert_eq!(pool.size().unwrap(), 16);
+        wait();
+        inner_mut(&pool).respawn().unwrap();
+        assert_eq!(inner(&pool).workers.len(), 16);
+
+        let diff = pool.set_size(1.try_into().unwrap()).unwrap();
+        assert_eq!(diff, -15);
+        assert_eq!(pool.size().unwrap(), 1);
+        wait();
+        inner_mut(&pool).respawn().unwrap();
+        assert_eq!(inner(&pool).workers.len(), 1);
+
+        let diff = pool.set_size(10.try_into().unwrap()).unwrap();
+        assert_eq!(diff, 9);
+        assert_eq!(pool.size().unwrap(), 10);
+        assert_eq!(inner(&pool).workers.len(), 10);
     }
 }

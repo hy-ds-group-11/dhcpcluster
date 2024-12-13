@@ -81,7 +81,7 @@ pub enum Error {
 pub struct Server {
     config: Arc<Config>,
     tx: Sender<ServerThreadMessage>,
-    thread_pool: Arc<ThreadPool>,
+    thread_pool: ThreadPool,
     coordinator_id: Option<PeerId>,
     dhcp_pool: DhcpService,
     peers: HashMap<PeerId, Peer>,
@@ -105,23 +105,21 @@ impl Server {
         let mut server = Self {
             config: Arc::new(config),
             tx,
-            thread_pool: Arc::new(
-                ThreadPool::new(
-                    thread_count,
-                    Box::new(|worker_id: usize, msg: Box<dyn Any>| {
-                        console::warning!("Worker {worker_id} panicked");
-                        // Try both &str and String, I don't know which type panic messages will occur in
-                        if let Some(msg) = msg
-                            .downcast_ref::<&str>()
-                            .map(|s| s.to_string())
-                            .or(msg.downcast_ref::<String>().cloned())
-                        {
-                            console::warning!("{}", msg);
-                        }
-                    }),
-                )
-                .map_err(Error::Spawn)?,
-            ),
+            thread_pool: ThreadPool::new(
+                thread_count,
+                Box::new(|worker_id: usize, msg: Box<dyn Any>| {
+                    console::warning!("Worker {worker_id} panicked");
+                    // Try both &str and String, I don't know which type panic messages will occur in
+                    if let Some(msg) = msg
+                        .downcast_ref::<&str>()
+                        .map(|s| s.to_string())
+                        .or(msg.downcast_ref::<String>().cloned())
+                    {
+                        console::warning!("{}", msg);
+                    }
+                }),
+            )
+            .map_err(Error::Spawn)?,
             coordinator_id: None,
             dhcp_pool,
             peers: HashMap::new(),
@@ -140,7 +138,7 @@ impl Server {
 
         let client_listener_thread = {
             let server_tx = server.tx.clone();
-            let thread_pool = Arc::clone(&server.thread_pool);
+            let thread_pool = server.thread_pool.clone();
             thread::Builder::new()
                 .name(format!("{}::client_listener_thread", module_path!()))
                 .spawn(move || Self::listen_clients(client_listener, server_tx, thread_pool))
@@ -541,7 +539,7 @@ impl Server {
     fn listen_clients(
         listener: TcpListener,
         server_tx: Sender<ServerThreadMessage>,
-        thread_pool: Arc<ThreadPool>,
+        thread_pool: ThreadPool,
     ) {
         for stream in listener.incoming() {
             match stream {

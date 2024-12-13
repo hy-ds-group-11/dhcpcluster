@@ -1,5 +1,10 @@
+#![deny(clippy::unwrap_used)]
+#![warn(clippy::pedantic)]
+#![allow(clippy::missing_errors_doc)]
+
 use std::{
     any::Any,
+    convert::TryInto,
     error::Error,
     io,
     num::NonZero,
@@ -36,7 +41,7 @@ fn new_poison_err(_: impl Error) -> io::Error {
 }
 
 impl ThreadPool {
-    /// Create a new ThreadPool.
+    /// Create a new `ThreadPool`.
     ///
     /// The size is the number of threads in the pool.
     pub fn new<P>(size: NonZero<usize>, panic_handler: P) -> io::Result<ThreadPool>
@@ -109,8 +114,7 @@ impl Clone for ThreadPool {
 
 impl Inner {
     fn partition_quit_workers(&mut self) -> usize {
-        self.workers
-            .sort_unstable_by_key(|worker| worker.has_quit());
+        self.workers.sort_unstable_by_key(Worker::has_quit);
         self.workers.partition_point(|worker| !worker.has_quit())
     }
 
@@ -119,7 +123,7 @@ impl Inner {
 
         // Extract quit workers and join them
         let quit_workers = self.workers.split_off(i);
-        for mut worker in quit_workers.into_iter() {
+        for mut worker in quit_workers {
             worker.join(&self.panic_handler);
         }
 
@@ -142,7 +146,8 @@ impl Inner {
 
     fn set_size(&mut self, size: NonZero<usize>) -> io::Result<isize> {
         let size: usize = size.into();
-        let diff = size as isize - self.size as isize;
+        let diff = TryInto::<isize>::try_into(size).expect("Too many threads")
+            - TryInto::<isize>::try_into(self.size).expect("Too many threads");
 
         // Stop extra workers
         if diff < 0 {
@@ -217,14 +222,12 @@ impl Worker {
     }
 
     fn has_quit(&self) -> bool {
-        self.thread
-            .as_ref()
-            .map(|handle| handle.is_finished())
-            .unwrap_or(true)
+        self.thread.as_ref().map_or(true, JoinHandle::is_finished)
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::time::Duration;
 
@@ -252,7 +255,7 @@ mod tests {
             (i, inner(&pool).workers.len())
         };
 
-        for worker in inner(&pool).workers.iter() {
+        for worker in &inner(&pool).workers {
             println!("{}: {}", worker.id, worker.has_quit());
         }
         println!();

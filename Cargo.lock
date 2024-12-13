@@ -304,7 +304,7 @@ dependencies = [
 
 [[package]]
 name = "server-node"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ciborium",
  "protocol",
@@ -358,7 +358,7 @@ dependencies = [
 
 [[package]]
 name = "thread-pool"
-version = "1.0.0"
+version = "2.0.0"
 
 [[package]]
 name = "toml"

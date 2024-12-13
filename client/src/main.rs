@@ -475,7 +475,16 @@ fn handle_query_command(
             let results: Vec<_> = rx.into_iter().collect();
             let successful = results.iter().filter(|res| res.is_ok()).count();
 
-            println!("Successful: {} / {}", successful, cmd.batch);
+            println!(
+                "Successful: {}{}\x1b[0m / \x1b[32m{}\x1b[0m",
+                if successful == cmd.batch as usize {
+                    "\x1b[32m"
+                } else {
+                    "\x1b[31m"
+                },
+                successful,
+                cmd.batch
+            );
 
             // Define helper closure to clean up redundant iterator chains
             let query_times_nanos = || {
@@ -487,21 +496,30 @@ fn handle_query_command(
             };
 
             if let Some(min_time) = query_times_nanos().min() {
-                println!("Min query time: {:.3?}", Duration::from_nanos(min_time));
+                println!(
+                    "Min query time: \x1b[32m{:.3?}\x1b[0m",
+                    Duration::from_nanos(min_time)
+                );
             }
             if let (sum, Ok(count @ 1..)) = (
                 query_times_nanos().sum::<u64>(),
                 query_times_nanos().count().try_into(),
             ) {
-                println!("Avg query time: {:.3?}", Duration::from_nanos(sum / count))
+                println!(
+                    "Avg query time: \x1b[32m{:.3?}\x1b[0m",
+                    Duration::from_nanos(sum / count)
+                )
             }
             if let Some(max_time) = query_times_nanos().max() {
-                println!("Max query time: {:.3?}", Duration::from_nanos(max_time));
+                println!(
+                    "Max query time: \x1b[32m{:.3?}\x1b[0m",
+                    Duration::from_nanos(max_time)
+                );
             }
 
             let time = start.elapsed();
             println!(
-                "Queries took {:.3?}, rate: {:.1} leases/s",
+                "Queries took \x1b[32m{:.3?}\x1b[0m, rate: \x1b[32m{:.1}\x1b[0m leases/s",
                 time,
                 (successful as f64 / time.as_millis() as f64) * 1000.
             );

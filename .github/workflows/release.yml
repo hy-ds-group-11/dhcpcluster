@@ -39,11 +39,9 @@ jobs:
           args: "--locked --release"
           strip: true
       - name: Rename client
-        run: mv target/client client-${{ matrix.platform.target }}
+        run: mv target/${{ matrix.platform.target }}/release/client client-${{ matrix.platform.target }}
       - name: Rename server-node
-        run: mv target/server-node server-${{ matrix.platform.target }}
-      - name: Debug listing
-        run: tree
+        run: mv target/${{ matrix.platform.target }}/release/server-node server-${{ matrix.platform.target }}
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

@@ -78,7 +78,7 @@ fn print_error(mut error: &dyn Error) {
 
 fn help() {
     println!(
-        "---- DHCP Client ----
+        "---- DHCP Client v{} ----
 Supported commands:
     \x1b[32mquery\x1b[0m [\x1b[36mOPTION\x1b[0m]... [\x1b[36mSERVER\x1b[0m]
         \x1b[36mOPTION\x1b[0m:
@@ -105,7 +105,7 @@ Supported commands:
 
 Supported shorthands: qr, re, gen, ls, cf, h, q
 "
-    );
+    , env!("CARGO_PKG_VERSION"));
 }
 
 #[derive(Error, Debug)]

@@ -82,7 +82,11 @@ impl Server {
         let (tx, server_rx) = mpsc::channel();
         let dhcp_service = dhcp::Service::new(config.dhcp_pool.clone(), config.lease_time);
         let thread_count = config.thread_count;
-        console::log!("Starting with {} workers", thread_count);
+        console::log!(
+            "Server version {} starting with {} workers",
+            env!("CARGO_PKG_VERSION"),
+            thread_count
+        );
         let mut server = Self {
             config: Arc::new(config),
             tx,

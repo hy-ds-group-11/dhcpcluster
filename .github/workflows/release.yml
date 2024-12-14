@@ -48,21 +48,27 @@ jobs:
       - name: Package
         shell: bash
         run: |
+          # Configure platform variables
+          archive="dhcpcluster-${{ matrix.platform.os-name }}-${{ github.ref_name }}"
+          ext=""
+          if [[ ${{ matrix.platform.os-name }} == Windows* ]]; then
+            ext=".exe"
+          fi
+          files="client${ext} server${ext} client-config-template.toml server-config-template.toml"
+          # Prepare target directory for archival
           cp client/config-template.toml target/client-config-template.toml
           cp server-node/config-template.toml target/server-config-template.toml
           cd target
+          cp ${{ matrix.platform.target }}/release/client${ext} client${ext}
+          cp ${{ matrix.platform.target }}/release/server-node${ext} server${ext}
+          # Create archive
           if [[ ${{ matrix.platform.os-name }} == Linux* ]]; then
-            mv ${{ matrix.platform.target }}/release/client client
-            mv ${{ matrix.platform.target }}/release/server-node server
-            tar -I zstd -cvf dhcpcluster-${{ matrix.platform.os-name }}.tar.zst client server client-config-template.toml server-config-template.toml
+            tar -I zstd -cvf ${archive}.tar.zst ${files}
           elif [[ ${{ matrix.platform.os-name }} == Windows* ]]; then
-            mv ${{ matrix.platform.target }}/release/client.exe client.exe
-            mv ${{ matrix.platform.target }}/release/server-node.exe server.exe
-            pwsh -Command "Compress-Archive -Path client.exe,server.exe,client-config-template.toml,server-config-template.toml -Destination dhcpcluster-${{ matrix.platform.os-name }}.zip"
+            files="$(echo ${files} | tr ' ' ',')"
+            pwsh -Command "Compress-Archive -Path ${files} -Destination ${archive}.zip"
           elif [[ ${{ matrix.platform.os-name }} == MacOS* ]]; then
-            mv ${{ matrix.platform.target }}/release/client client
-            mv ${{ matrix.platform.target }}/release/server-node server
-            zip dhcpcluster-${{ matrix.platform.os-name }}.zip client server client-config-template.toml server-config-template.toml
+            zip ${archive}.zip ${files}
           fi
       - name: Publish release
         uses: softprops/action-gh-release@v2

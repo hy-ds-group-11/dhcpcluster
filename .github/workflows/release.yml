@@ -8,6 +8,7 @@ jobs:
   release:
     name: Release - ${{ matrix.platform.os-name }}
     strategy:
+      fail-fast: false
       matrix:
         platform:
           - os-name: Linux-x86_64
@@ -40,11 +41,14 @@ jobs:
       - name: Publish server-node
         uses: houseabsolute/actions-rust-release@v0
         with:
+          changes-file:
           executable-name: server-node
           extra-files: server-node/config-template.toml
           target: ${{ matrix.platform.target }}
       - name: Publish client
         uses: houseabsolute/actions-rust-release@v0
         with:
+          changes-file:
           executable-name: client
+          extra-files:
           target: ${{ matrix.platform.target }}

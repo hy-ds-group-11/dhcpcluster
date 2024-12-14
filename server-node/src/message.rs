@@ -8,7 +8,7 @@
 
 use crate::{
     dhcp::{Ipv4Range, Lease},
-    peer,
+    server::peer,
 };
 use protocol::{RecvCbor, SendCbor};
 use serde::{Deserialize, Serialize};

@@ -5,7 +5,7 @@
 //!
 //! Jump to [`Config::load_toml_file`] for configuration file loading.
 
-use crate::{dhcp::Ipv4Range, peer};
+use crate::{dhcp::Ipv4Range, server::peer};
 use serde::Deserialize;
 use std::{
     net::{Ipv4Addr, SocketAddr},

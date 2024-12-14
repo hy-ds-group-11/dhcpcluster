@@ -30,7 +30,6 @@ pub mod config;
 pub mod console;
 pub mod dhcp;
 pub mod message;
-pub mod peer;
 pub mod server;
 
 pub trait ThreadJoin: Sized {

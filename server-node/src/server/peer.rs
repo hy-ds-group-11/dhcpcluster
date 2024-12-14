@@ -1,11 +1,9 @@
-use crate::{
-    config::Config, console, dhcp::Lease, message::Message, server::MainThreadMessage, ThreadJoin,
-};
+use crate::{config::Config, console, dhcp::Lease, message::Message, server::Event, ThreadJoin};
 use protocol::{RecvCbor, SendCbor};
 use std::{
     fmt::Display,
     io,
-    net::{TcpStream, ToSocketAddrs},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -62,12 +60,25 @@ pub struct Peer {
 }
 
 impl Peer {
+    /// Blocking incoming peer connection accept loop
+    pub fn listen(listener: &TcpListener, server_tx: &Sender<Event>) {
+        // TODO: Here we may need a mechanism to end this loop
+        for stream in listener.incoming() {
+            match stream {
+                Ok(stream) => server_tx
+                    .send(Event::IncomingPeerConnection(stream))
+                    .expect("Invariant violated: server_rx has been dropped before joining peer listener thread"),
+                Err(e) => console::error!(&e, "Accepting new peer connection failed"),
+            }
+        }
+    }
+
     /// Initiate peer connection
     pub fn connect(
         config: &Arc<Config>,
         peer_id: Id,
         name: &str,
-        server_tx: &Sender<MainThreadMessage>,
+        server_tx: &Sender<Event>,
     ) -> Result<JoinSuccess, HandshakeError> {
         let timeout = config.peer_connection_timeout;
         console::debug!("Connecting to {peer_id} at {name}");
@@ -109,7 +120,7 @@ impl Peer {
     pub fn new(
         mut stream: TcpStream,
         id: Id,
-        server_tx: Sender<MainThreadMessage>,
+        server_tx: Sender<Event>,
         heartbeat_timeout: Duration,
     ) -> Self {
         console::log!("Started connection to peer with id {id}");
@@ -148,7 +159,7 @@ impl Peer {
         mut stream: TcpStream,
         config: &Arc<Config>,
         expected_id: Id,
-        server_tx: Sender<MainThreadMessage>,
+        server_tx: Sender<Event>,
     ) -> Result<JoinSuccess, HandshakeError> {
         stream
             .set_read_timeout(Some(config.heartbeat_timeout * 3))
@@ -190,7 +201,7 @@ impl Peer {
     fn read_thread_fn(
         stream: &mut TcpStream,
         peer_id: Id,
-        server_tx: &Sender<MainThreadMessage>,
+        server_tx: &Sender<Event>,
         terminated: &Arc<AtomicBool>,
     ) {
         // This will not block forever, it will eventually time out,
@@ -202,7 +213,7 @@ impl Peer {
                     break;
                 }
                 _ => server_tx
-                    .send(MainThreadMessage::PeerMessage {
+                    .send(Event::PeerMessage {
                         sender_id: peer_id,
                         message,
                     })
@@ -215,7 +226,7 @@ impl Peer {
         }
 
         server_tx
-            .send(MainThreadMessage::PeerLost(peer_id))
+            .send(Event::PeerLost(peer_id))
             .expect("Main thread messaging failed!");
 
         console::log!("Connection to peer {peer_id} lost");

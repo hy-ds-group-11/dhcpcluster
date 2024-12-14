@@ -1,34 +1,33 @@
+pub mod client;
+pub mod peer;
+
 use crate::{
     config::Config,
     console,
     dhcp::{self, Ipv4Range, Lease, LeaseOffer},
     message::Message,
-    peer::{self, HandshakeError, JoinSuccess, Peer},
     ThreadJoin,
 };
-use protocol::{
-    CborRecvError, DhcpClientMessage, DhcpServerMessage, MacAddr, RecvCbor, RecvError, SendCbor,
-};
+use peer::{HandshakeError, JoinSuccess, Peer};
+use protocol::{MacAddr, RecvCbor, SendCbor};
 use std::{
     any::Any,
     collections::HashMap,
     fmt::Display,
-    io::{self, ErrorKind},
     net::{Ipv4Addr, TcpListener, TcpStream},
     sync::{
-        mpsc::{self, Sender},
+        mpsc::{self, Receiver, Sender},
         Arc,
     },
     thread,
     time::{Duration, SystemTime},
 };
-use thiserror::Error;
 use thread_pool::ThreadPool;
 
 type LeaseConfirmation = bool;
 
 #[derive(Debug)]
-pub enum MainThreadMessage {
+pub enum Event {
     IncomingPeerConnection(TcpStream),
     EstablishedPeerConnection(JoinSuccess),
     PeerLost(peer::Id),
@@ -49,7 +48,7 @@ pub enum MainThreadMessage {
 }
 
 #[derive(Debug, PartialEq)]
-enum ServerRole {
+enum ElectionState {
     WaitingForElection,
     Coordinator,
     Follower,
@@ -63,32 +62,22 @@ enum ConnectAttempt {
     Finished(SystemTime),
 }
 
-#[derive(Error, Debug)]
-pub enum Error {
-    #[error("Failed to spawn threads")]
-    Spawn(#[source] io::Error),
-}
-
 /// The distributed DHCP server
 pub struct Server {
     config: Arc<Config>,
-    tx: Sender<MainThreadMessage>,
+    tx: Sender<Event>,
     thread_pool: ThreadPool,
     coordinator_id: Option<peer::Id>,
     dhcp_service: dhcp::Service,
     peers: HashMap<peer::Id, Peer>,
-    local_role: ServerRole,
+    election_state: ElectionState,
     majority: bool,
     last_connect_attempt: ConnectAttempt,
 }
 
 impl Server {
     /// Start listening to incoming connections from server peers and DHCP clients.
-    pub fn start(
-        config: Config,
-        peer_listener: TcpListener,
-        client_listener: TcpListener,
-    ) -> Result<(), Error> {
+    pub fn start(config: Config, peer_listener: TcpListener, client_listener: TcpListener) {
         // Create main thread channel
         let (tx, server_rx) = mpsc::channel();
         let dhcp_service = dhcp::Service::new(config.dhcp_pool.clone(), config.lease_time);
@@ -111,11 +100,13 @@ impl Server {
                     }
                 }),
             )
-            .map_err(Error::Spawn)?,
+            .unwrap_or_else(|e| {
+                panic!("ThreadPool failed to initialize\n{e}");
+            }),
             coordinator_id: None,
             dhcp_service,
             peers: HashMap::new(),
-            local_role: ServerRole::Follower,
+            election_state: ElectionState::Follower,
             majority: false,
             last_connect_attempt: ConnectAttempt::Never,
         };
@@ -124,8 +115,8 @@ impl Server {
             let server_tx = server.tx.clone();
             thread::Builder::new()
                 .name(format!("{}::peer_listener_thread", module_path!()))
-                .spawn(move || Server::listen_peers(&peer_listener, &server_tx))
-                .map_err(Error::Spawn)?
+                .spawn(move || Peer::listen(&peer_listener, &server_tx))
+                .expect("Cannot spawn peer listener thread")
         };
 
         let client_listener_thread = {
@@ -135,73 +126,77 @@ impl Server {
             thread::Builder::new()
                 .name(format!("{}::client_listener_thread", module_path!()))
                 .spawn(move || {
-                    Self::listen_clients(&client_listener, &config, &server_tx, &thread_pool);
+                    client::listen_clients(&client_listener, &config, &server_tx, &thread_pool);
                 })
-                .map_err(Error::Spawn)?
+                .expect("Cannot spawn client listener thread")
         };
 
-        loop {
-            // Render pretty text representation if running in a terminal
-            console::update_state(format!("{server}"));
-
-            // Periodically check if server needs to connect to peers
-            match server.last_connect_attempt {
-                ConnectAttempt::Never => server.attempt_connect(),
-                ConnectAttempt::Finished(at) => {
-                    if at.elapsed().unwrap_or(Duration::ZERO) > server.config.heartbeat_timeout {
-                        server.attempt_connect();
-                    }
-                }
-                ConnectAttempt::Running => {}
-            };
-
-            // Receive the next message from other threads (peer I/O, listeners, timers etc.)
-            let message = match server_rx.recv_timeout(server.config.heartbeat_timeout) {
-                Ok(message) => message,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-            };
-
-            match message {
-                MainThreadMessage::IncomingPeerConnection(tcp_stream) => {
-                    server.answer_handshake(tcp_stream);
-                }
-                MainThreadMessage::EstablishedPeerConnection(JoinSuccess {
-                    peer_id,
-                    peer,
-                    leases,
-                }) => {
-                    if let Ok(()) = server.add_peer(peer_id, peer) {
-                        if server.dhcp_service.leases.len() < leases.len() {
-                            console::debug!("Updating leases");
-                            server.dhcp_service.leases = leases;
-                        }
-                        // Need to initiate election, cluster changed
-                        server.start_election();
-                    }
-                }
-                MainThreadMessage::PeerLost(peer_id) => server.remove_peer(peer_id),
-                MainThreadMessage::ElectionTimeout => server.finish_election(),
-                MainThreadMessage::PeerMessage { sender_id, message } => {
-                    server.handle_peer_message(sender_id, message);
-                }
-                MainThreadMessage::LeaseRequest { mac_address, tx } => {
-                    server.handle_lease_request(mac_address, &tx);
-                }
-                MainThreadMessage::ConfirmRequest {
-                    mac_address,
-                    ip,
-                    tx,
-                } => server.handle_confirm_request(mac_address, ip, &tx),
-            }
-        }
+        // The main thread enters a loop, reacting to events from other threads
+        server.run_event_loop(&server_rx);
 
         peer_listener_thread.join_and_handle_panic();
         client_listener_thread.join_and_handle_panic();
         for peer in server.peers.into_values() {
             drop(peer);
         }
-        Ok(())
+    }
+
+    fn run_event_loop(&mut self, server_rx: &Receiver<Event>) {
+        loop {
+            // Render pretty text representation if running in a terminal
+            console::update_state(format!("{self}"));
+
+            // Periodically check if server needs to connect to peers
+            match self.last_connect_attempt {
+                ConnectAttempt::Never => self.attempt_connect(),
+                ConnectAttempt::Finished(at) => {
+                    if at.elapsed().unwrap_or(Duration::ZERO) > self.config.heartbeat_timeout {
+                        self.attempt_connect();
+                    }
+                }
+                ConnectAttempt::Running => {}
+            };
+
+            // Receive the next message from other threads (peer I/O, listeners, timers etc.)
+            let message = match server_rx.recv_timeout(self.config.heartbeat_timeout) {
+                Ok(message) => message,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            };
+
+            match message {
+                Event::IncomingPeerConnection(tcp_stream) => {
+                    self.answer_handshake(tcp_stream);
+                }
+                Event::EstablishedPeerConnection(JoinSuccess {
+                    peer_id,
+                    peer,
+                    leases,
+                }) => {
+                    if let Ok(()) = self.add_peer(peer_id, peer) {
+                        if self.dhcp_service.leases.len() < leases.len() {
+                            console::debug!("Updating leases");
+                            self.dhcp_service.leases = leases;
+                        }
+                        // Need to initiate election, cluster changed
+                        self.start_election();
+                    }
+                }
+                Event::PeerLost(peer_id) => self.remove_peer(peer_id),
+                Event::ElectionTimeout => self.finish_election(),
+                Event::PeerMessage { sender_id, message } => {
+                    self.handle_peer_message(sender_id, message);
+                }
+                Event::LeaseRequest { mac_address, tx } => {
+                    self.handle_lease_request(mac_address, &tx);
+                }
+                Event::ConfirmRequest {
+                    mac_address,
+                    ip,
+                    tx,
+                } => self.handle_confirm_request(mac_address, ip, &tx),
+            }
+        }
     }
 
     fn attempt_connect(&mut self) {
@@ -222,7 +217,7 @@ impl Server {
                         move || match Peer::connect(&config, peer_id, &name, &server_tx) {
                             Ok(success) => {
                                 server_tx
-                                    .send(MainThreadMessage::EstablishedPeerConnection(success))
+                                    .send(Event::EstablishedPeerConnection(success))
                                     .expect("Invariant violated: server_rx has been dropped");
                             }
                             Err(e) => {
@@ -238,130 +233,6 @@ impl Server {
         console::debug!("Connection threads spawned");
     }
 
-    fn serve_client(
-        stream: &mut TcpStream,
-        config: &Arc<Config>,
-        server_tx: &Sender<MainThreadMessage>,
-    ) {
-        stream
-            .set_read_timeout(Some(config.client_timeout))
-            .expect("Can't set stream read timeout");
-        let result = stream.recv();
-        match result {
-            Ok(DhcpClientMessage::Discover { mac_address }) => {
-                Self::handle_discover(stream, server_tx, mac_address);
-            }
-            Ok(DhcpClientMessage::Request { mac_address, ip }) => {
-                Self::handle_renew(stream, server_tx, mac_address, ip);
-            }
-            Err(e) => console::error!(&e, "Could not receive request from the client"),
-        }
-    }
-
-    fn handle_discover(
-        stream: &mut TcpStream,
-        server_tx: &Sender<MainThreadMessage>,
-        mac_address: MacAddr,
-    ) {
-        #[cfg(debug_assertions)]
-        assert!(matches!(stream.read_timeout(), Ok(Some(_))));
-
-        let (tx, rx) = mpsc::channel();
-        server_tx
-            .send(MainThreadMessage::LeaseRequest { mac_address, tx })
-            .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
-
-        // Wait for main thread to process DHCP discover
-        let Ok(offer) = rx.recv() else {
-            if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
-                console::error!(&e, "Could not reply with Nack to the client");
-            }
-            return;
-        };
-
-        // Send main thread's offer to the client
-        if let Err(e) = stream.send(&DhcpServerMessage::Offer(offer.into())) {
-            console::error!(&e, "Could not send offer to the client");
-            return;
-        }
-
-        // Listen for client's confirmation. TODO: with real DHCP, this goes elsewhere
-        match stream.recv() {
-            Ok(DhcpClientMessage::Request { mac_address, ip }) => {
-                let (tx, rx) = mpsc::channel();
-                server_tx
-                    .send(MainThreadMessage::ConfirmRequest {
-                        mac_address,
-                        ip,
-                        tx,
-                    })
-                    .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
-                // Wait for processing DHCP commit
-                match rx.recv() {
-                    Ok(committed) => {
-                        if committed {
-                            if let Err(e) = stream.send(&DhcpServerMessage::Ack) {
-                                console::error!(&e, "Could not send Ack to the client");
-                            }
-                        } else if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
-                            console::error!(&e, "Could not send Nack to the client");
-                        }
-                    }
-                    Err(e) => {
-                        console::error!(&e, "Could not commit lease");
-                    }
-                }
-            }
-            Ok(message) => console::warning!(
-                "Client didn't follow protocol!\nExpected: Request, got: {message:?}"
-            ),
-            Err(ref error) => {
-                if let CborRecvError::Receive(RecvError::Io(io_error)) = error {
-                    match io_error.kind() {
-                        ErrorKind::WouldBlock | ErrorKind::TimedOut => {
-                            console::error!(
-                                error,
-                                "Client didn't follow Discover with Request within {:?}",
-                                stream.read_timeout().ok().flatten().expect(
-                                    "handle_discover called without read timeout set on stream"
-                                ),
-                            );
-                        }
-                        _ => console::error!(error, "Could not receive client reply"),
-                    }
-                } else {
-                    console::error!(error, "Could not receive client reply");
-                }
-            }
-        }
-    }
-
-    fn handle_renew(
-        stream: &mut TcpStream,
-        server_tx: &Sender<MainThreadMessage>,
-        mac_address: MacAddr,
-        ip: Ipv4Addr,
-    ) {
-        #[cfg(debug_assertions)]
-        assert!(matches!(stream.read_timeout(), Ok(Some(_))));
-
-        let (tx, rx) = mpsc::channel();
-        server_tx
-            .send(MainThreadMessage::ConfirmRequest {
-                mac_address,
-                ip,
-                tx,
-            })
-            .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
-        if rx.recv().unwrap_or(false) {
-            if let Err(e) = stream.send(&DhcpServerMessage::Ack) {
-                console::error!(&e, "Could not send Ack to the client");
-            }
-        } else if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
-            console::error!(&e, "Could not send Nack to the client");
-        }
-    }
-
     fn handle_peer_message(&mut self, sender_id: peer::Id, message: Message) {
         match message {
             Message::Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
@@ -371,7 +242,9 @@ impl Server {
             Message::Lease(lease) => self.handle_add_lease(lease),
             Message::SetPool(update) => self.handle_set_pool(update),
             Message::SetMajority(majority) => self.handle_majority(majority),
-            _ => panic!("Server received unexpected {message:?} from {sender_id}"),
+            Message::Join(..) | Message::JoinAck { .. } => {
+                console::warning!("Server received unexpected {message:?} from peer {sender_id}");
+            }
         };
     }
 
@@ -395,9 +268,9 @@ impl Server {
     fn handle_okay(&mut self, sender_id: peer::Id, message: &Message) {
         assert!(sender_id > self.config.id);
         console::log!("Peer {sender_id}: {message:?}, ");
-        if self.local_role == ServerRole::WaitingForElection {
+        if self.election_state == ElectionState::WaitingForElection {
             console::log!("Stepping down to Follower");
-            self.local_role = ServerRole::Follower;
+            self.election_state = ElectionState::Follower;
         } else {
             console::log!("Already stepped down");
         }
@@ -406,7 +279,7 @@ impl Server {
     fn handle_coordinator(&mut self, sender_id: peer::Id) {
         console::log!("Recognizing {sender_id} as Coordinator");
         self.coordinator_id = Some(sender_id);
-        self.local_role = ServerRole::Follower;
+        self.election_state = ElectionState::Follower;
         if sender_id < self.config.id {
             self.start_election();
         }
@@ -475,38 +348,6 @@ impl Server {
         };
     }
 
-    fn listen_peers(listener: &TcpListener, server_tx: &Sender<MainThreadMessage>) {
-        // TODO: Here we may need a mechanism to end this loop
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => server_tx
-                    .send(MainThreadMessage::IncomingPeerConnection(stream))
-                    .expect("Invariant violated: server_rx has been dropped before joining peer listener thread"),
-                Err(e) => console::error!(&e, "Accepting new peer connection failed"),
-            }
-        }
-    }
-
-    fn listen_clients(
-        listener: &TcpListener,
-        config: &Arc<Config>,
-        server_tx: &Sender<MainThreadMessage>,
-        thread_pool: &ThreadPool,
-    ) {
-        for stream in listener.incoming() {
-            match stream {
-                Ok(mut stream) => {
-                    let config = Arc::clone(config);
-                    let tx = server_tx.clone();
-                    thread_pool
-                        .execute(move || Self::serve_client(&mut stream, &config, &tx))
-                        .expect("Thread pool cannot spawn threads");
-                }
-                Err(e) => console::error!(&e, "Accepting new client connection failed"),
-            }
-        }
-    }
-
     fn answer_handshake(&mut self, mut stream: TcpStream) {
         // TODO: security: we should have a mechanism to authenticate peer, perhaps TLS
         stream
@@ -548,7 +389,7 @@ impl Server {
         }
 
         // New peer joined, we want to inform it of the coordinator and reallocate the DHCP pool
-        if self.local_role == ServerRole::Coordinator {
+        if self.election_state == ElectionState::Coordinator {
             self.become_coordinator();
         }
     }
@@ -574,7 +415,7 @@ impl Server {
         self.peers.remove(&peer_id);
 
         // Peer left, we want to confirm the coordinator and reallocate the DHCP pool
-        if self.local_role == ServerRole::Coordinator {
+        if self.election_state == ElectionState::Coordinator {
             self.become_coordinator();
         }
 
@@ -588,7 +429,7 @@ impl Server {
     /// This function starts a timer thread which sleeps until the bully algorithm timeout expires.
     /// The timer triggers a [`ServerThreadMessage::ElectionTimeout`] to the the server thread.
     fn start_election(&mut self) {
-        self.local_role = ServerRole::WaitingForElection;
+        self.election_state = ElectionState::WaitingForElection;
 
         for (peer_id, peer) in &self.peers {
             if *peer_id > self.config.id {
@@ -605,7 +446,7 @@ impl Server {
                 console::log!("Starting election wait");
                 thread::sleep(dur);
                 console::log!("Election wait over");
-                if let Err(e) = server_tx.send(MainThreadMessage::ElectionTimeout) {
+                if let Err(e) = server_tx.send(Event::ElectionTimeout) {
                     console::warning!("Election timer thread can't notify the server");
                     console::error!(&e);
                 }
@@ -616,21 +457,21 @@ impl Server {
     /// Inspect current server role. Become leader and send [`Message::Coordinator`] to all peers
     /// if no event has reset the server role back to [`ServerRole::Follower`].
     fn finish_election(&mut self) {
-        match self.local_role {
-            ServerRole::WaitingForElection => {
+        match self.election_state {
+            ElectionState::WaitingForElection => {
                 self.become_coordinator();
             }
-            ServerRole::Coordinator => {
+            ElectionState::Coordinator => {
                 console::log!("Already Coordinator when election ended");
             }
-            ServerRole::Follower => {
+            ElectionState::Follower => {
                 console::log!("Received OK during election");
             }
         }
     }
 
     fn become_coordinator(&mut self) {
-        self.local_role = ServerRole::Coordinator;
+        self.election_state = ElectionState::Coordinator;
         self.coordinator_id = Some(self.config.id);
         let majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
         self.handle_majority(majority);
@@ -703,7 +544,7 @@ impl Display for Server {
 
         // Role
         write_label(f, "Current role")?;
-        writeln!(f, "{:?}", self.local_role)?;
+        writeln!(f, "{:?}", self.election_state)?;
 
         // Majority and dhcp address
         write_label(f, "Service")?;

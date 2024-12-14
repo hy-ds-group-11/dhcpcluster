@@ -19,7 +19,6 @@ use std::{
     net::{Ipv4Addr, TcpStream},
     num::ParseIntError,
     str::FromStr,
-    time::Duration,
 };
 use thiserror::Error;
 
@@ -128,37 +127,20 @@ pub enum CborSendError {
     Send(#[from] SendError),
 }
 
-// TODO: remove the recv_timeout variant in favor of setting timeouts in connection handling code
 // The temporary timeout setting may be fragile
 pub trait RecvCbor: Sized + for<'a> Deserialize<'a> {
     /// # Read a message from a [`TcpStream`].
-    /// This function can block the calling thread for the stream's current timeout setting (see [`TcpStream::set_read_timeout`]).
+    /// This function can block the calling thread for the stream's current read timeout setting
+    /// (see [`TcpStream::set_read_timeout`]).
     fn recv(stream: &TcpStream) -> Result<Self, CborRecvError> {
         Ok(ciborium::from_reader(stream)?)
-    }
-
-    /// # Read a message from a [`TcpStream`], with a timeout.
-    /// This function can block the calling thread for the specified timeout duration.
-    /// ## Concurrency
-    /// This function may not be used concurrently with a stream that has been shared between different threads.
-    /// Doing so may result in unexpected changes to the stream's timeout.
-    fn recv_timeout(stream: &TcpStream, timeout: Duration) -> Result<Self, CborRecvError> {
-        let previous_timeout = stream.read_timeout().map_err(CborRecvError::GetTimeout)?;
-        stream
-            .set_read_timeout(Some(timeout))
-            .map_err(CborRecvError::SetTimeout)?;
-        let result = Self::recv(stream);
-        stream
-            .set_read_timeout(previous_timeout)
-            .map_err(CborRecvError::SetTimeout)?;
-        result
     }
 }
 
 pub trait SendCbor: Sized + Serialize {
     /// # Send a message over a [`TcpStream`]
-    fn send(stream: &TcpStream, message: &Self) -> Result<(), CborSendError> {
-        Ok(ciborium::into_writer(message, stream)?)
+    fn send(&self, stream: &TcpStream) -> Result<(), CborSendError> {
+        Ok(ciborium::into_writer(self, stream)?)
     }
 }
 

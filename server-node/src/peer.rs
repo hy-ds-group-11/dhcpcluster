@@ -91,8 +91,12 @@ impl Peer {
         config: &Arc<Config>,
         server_tx: Sender<MainThreadMessage>,
     ) -> Result<JoinSuccess, HandshakeError> {
-        Message::send(&stream, &Message::Join(config.id))?;
-        match Message::recv_timeout(&stream, config.heartbeat_timeout)? {
+        stream
+            .set_read_timeout(Some(config.heartbeat_timeout * 3))
+            .expect("Can't set stream read timeout");
+
+        Message::Join(config.id).send(&stream)?;
+        match Message::recv(&stream)? {
             Message::JoinAck { peer_id, leases } => {
                 console::log!("Connected to peer {peer_id}");
                 Ok(JoinSuccess {
@@ -154,13 +158,13 @@ impl Peer {
         loop {
             match rx.recv_timeout(timeout) {
                 Ok(message) => {
-                    if let Err(e) = Message::send(stream, &message) {
+                    if let Err(e) = message.send(stream) {
                         console::error!(&e, "Failed to send {message:?} to peer {peer_id}");
                         break;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Err(e) = Message::send(stream, &Message::Heartbeat) {
+                    if let Err(e) = Message::Heartbeat.send(stream) {
                         console::error!(&e, "Failed to send heartbeat to peer {peer_id}");
                         break;
                     }

@@ -23,6 +23,7 @@ pub struct File {
     id: peer::Id,
     heartbeat_timeout: u64,
     peer_connection_timeout: Option<u64>,
+    client_timeout: Option<u64>,
     net: Ipv4Addr,
     prefix_length: u32,
     lease_time: u64,
@@ -40,6 +41,7 @@ pub struct Config {
     pub id: peer::Id,
     pub heartbeat_timeout: Duration,
     pub peer_connection_timeout: Option<Duration>,
+    pub client_timeout: Duration,
     pub prefix_length: u32,
     pub dhcp_pool: Ipv4Range,
     pub lease_time: Duration,
@@ -57,12 +59,13 @@ impl From<File> for Config {
             peers,
             id,
             heartbeat_timeout,
+            peer_connection_timeout,
+            client_timeout,
             net,
             prefix_length,
             lease_time,
             dhcp_address,
             thread_count,
-            peer_connection_timeout,
         }: File,
     ) -> Self {
         Self {
@@ -70,6 +73,16 @@ impl From<File> for Config {
             peers,
             id,
             heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
+            // If None in File, default to 10 seconds
+            // If defined as Some(0), set None to Config
+            peer_connection_timeout: peer_connection_timeout
+                .map_or(Some(Duration::from_secs(10)), |sec| {
+                    (sec != 0).then_some(Duration::from_secs(sec))
+                }),
+            // If None in File, default to 10 seconds
+            client_timeout: client_timeout
+                .and_then(|sec| (sec != 0).then_some(Duration::from_secs(sec)))
+                .unwrap_or(Duration::from_secs(10)),
             prefix_length,
             dhcp_pool: Ipv4Range::from_cidr(net, prefix_length),
             lease_time: Duration::from_secs(lease_time),
@@ -81,12 +94,6 @@ impl From<File> for Config {
                 #[allow(clippy::unwrap_used, reason = "Default thread count from literal")]
                 thread::available_parallelism().unwrap_or(NonZero::new(8).unwrap())
             }),
-            // If None in ConfigFile, default to 10 seconds
-            // If defined as Some(0), set None to Config
-            peer_connection_timeout: peer_connection_timeout
-                .map_or(Some(Duration::from_secs(10)), |sec| {
-                    (sec != 0).then_some(Duration::from_secs(sec))
-                }),
         }
     }
 }

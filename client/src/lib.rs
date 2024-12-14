@@ -33,7 +33,7 @@ pub fn get_offer(
     stream: &TcpStream,
     mac_address: MacAddr,
 ) -> Result<Option<DhcpOffer>, CommunicationError> {
-    DhcpClientMessage::send(stream, &DhcpClientMessage::Discover { mac_address })?;
+    DhcpClientMessage::Discover { mac_address }.send(stream)?;
     let response = DhcpServerMessage::recv(stream)?;
     match response {
         DhcpServerMessage::Offer(offer) => Ok(Some(offer)),
@@ -47,7 +47,7 @@ pub fn get_ack(
     mac_address: MacAddr,
     ip: Ipv4Addr,
 ) -> Result<bool, CommunicationError> {
-    DhcpClientMessage::send(stream, &DhcpClientMessage::Request { mac_address, ip })?;
+    DhcpClientMessage::Request { mac_address, ip }.send(stream)?;
     let response = DhcpServerMessage::recv(stream)?;
     match response {
         msg @ DhcpServerMessage::Offer(_) => Err(CommunicationError::UnexpectedMessage(msg)),

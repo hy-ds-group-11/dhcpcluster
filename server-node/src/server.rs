@@ -136,11 +136,14 @@ impl Server {
         };
 
         let client_listener_thread = {
+            let config = Arc::clone(&server.config);
             let server_tx = server.tx.clone();
             let thread_pool = server.thread_pool.clone();
             thread::Builder::new()
                 .name(format!("{}::client_listener_thread", module_path!()))
-                .spawn(move || Self::listen_clients(&client_listener, &server_tx, &thread_pool))
+                .spawn(move || {
+                    Self::listen_clients(&client_listener, &config, &server_tx, &thread_pool);
+                })
                 .map_err(Error::Spawn)?
         };
 
@@ -285,7 +288,14 @@ impl Server {
         console::debug!("Connection threads spawned");
     }
 
-    fn serve_client(stream: &TcpStream, server_tx: &Sender<MainThreadMessage>) {
+    fn serve_client(
+        stream: &TcpStream,
+        config: &Arc<Config>,
+        server_tx: &Sender<MainThreadMessage>,
+    ) {
+        stream
+            .set_read_timeout(Some(config.client_timeout))
+            .expect("Can't set stream read timeout");
         let result = DhcpClientMessage::recv(stream);
         match result {
             Ok(DhcpClientMessage::Discover { mac_address }) => {
@@ -303,6 +313,9 @@ impl Server {
         server_tx: &Sender<MainThreadMessage>,
         mac_address: MacAddr,
     ) {
+        #[cfg(debug_assertions)]
+        assert!(matches!(stream.read_timeout(), Ok(Some(_))));
+
         let (tx, rx) = mpsc::channel();
         server_tx
             .send(MainThreadMessage::LeaseRequest { mac_address, tx })
@@ -310,7 +323,7 @@ impl Server {
 
         // Wait for processing DHCP discover
         let Ok(LeaseOffer { lease, subnet_mask }) = rx.recv() else {
-            if let Err(e) = DhcpServerMessage::send(stream, &DhcpServerMessage::Nack) {
+            if let Err(e) = DhcpServerMessage::Nack.send(stream) {
                 console::error!(&e, "Could not reply with Nack to the client");
             }
             return;
@@ -330,20 +343,18 @@ impl Server {
             .try_into()
             .unwrap();
 
-        if let Err(e) = DhcpServerMessage::send(
-            stream,
-            &DhcpServerMessage::Offer(DhcpOffer {
-                ip,
-                lease_time,
-                subnet_mask,
-            }),
-        ) {
+        if let Err(e) = DhcpServerMessage::Offer(DhcpOffer {
+            ip,
+            lease_time,
+            subnet_mask,
+        })
+        .send(stream)
+        {
             console::error!(&e, "Could not send offer to the client");
             return;
         }
 
-        let timeout = Duration::from_secs(10);
-        match DhcpClientMessage::recv_timeout(stream, timeout) {
+        match DhcpClientMessage::recv(stream) {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 let (tx, rx) = mpsc::channel();
                 server_tx
@@ -354,20 +365,19 @@ impl Server {
                     })
                     .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
                 // Wait for processing DHCP commit
-                match rx.recv_timeout(timeout) {
+                match rx.recv() {
                     Ok(committed) => {
                         if committed {
-                            if let Err(e) = DhcpServerMessage::send(stream, &DhcpServerMessage::Ack)
-                            {
+                            if let Err(e) = DhcpServerMessage::Ack.send(stream) {
                                 console::error!(&e, "Could not send Ack to the client");
                             }
-                        } else if let Err(e) =
-                            DhcpServerMessage::send(stream, &DhcpServerMessage::Nack)
-                        {
+                        } else if let Err(e) = DhcpServerMessage::Nack.send(stream) {
                             console::error!(&e, "Could not send Nack to the client");
                         }
                     }
-                    Err(_) => todo!(),
+                    Err(e) => {
+                        console::error!(&e, "Could not commit lease");
+                    }
                 }
             }
             Ok(message) => console::warning!(
@@ -379,7 +389,10 @@ impl Server {
                         ErrorKind::WouldBlock | ErrorKind::TimedOut => {
                             console::error!(
                                 error,
-                                "Client didn't follow Discover with Request within {timeout:?}"
+                                "Client didn't follow Discover with Request within {:?}",
+                                stream.read_timeout().ok().flatten().expect(
+                                    "handle_discover called without read timeout set on stream"
+                                ),
                             );
                         }
                         _ => console::error!(error, "Could not receive client reply"),
@@ -397,6 +410,9 @@ impl Server {
         mac_address: MacAddr,
         ip: Ipv4Addr,
     ) {
+        #[cfg(debug_assertions)]
+        assert!(matches!(stream.read_timeout(), Ok(Some(_))));
+
         let (tx, rx) = mpsc::channel();
         server_tx
             .send(MainThreadMessage::ConfirmRequest {
@@ -406,10 +422,10 @@ impl Server {
             })
             .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
         if rx.recv().unwrap_or(false) {
-            if let Err(e) = DhcpServerMessage::send(stream, &DhcpServerMessage::Ack) {
+            if let Err(e) = DhcpServerMessage::Ack.send(stream) {
                 console::error!(&e, "Could not send Ack to the client");
             }
-        } else if let Err(e) = DhcpServerMessage::send(stream, &DhcpServerMessage::Nack) {
+        } else if let Err(e) = DhcpServerMessage::Nack.send(stream) {
             console::error!(&e, "Could not send Nack to the client");
         }
     }
@@ -541,15 +557,17 @@ impl Server {
 
     fn listen_clients(
         listener: &TcpListener,
+        config: &Arc<Config>,
         server_tx: &Sender<MainThreadMessage>,
         thread_pool: &ThreadPool,
     ) {
         for stream in listener.incoming() {
             match stream {
                 Ok(stream) => {
+                    let config = Arc::clone(config);
                     let tx = server_tx.clone();
                     thread_pool
-                        .execute(move || Self::serve_client(&stream, &tx))
+                        .execute(move || Self::serve_client(&stream, &config, &tx))
                         .expect("Thread pool cannot spawn threads");
                 }
                 Err(e) => console::error!(&e, "Accepting new client connection failed"),
@@ -559,7 +577,10 @@ impl Server {
 
     fn answer_handshake(&mut self, stream: TcpStream) {
         // TODO: security: we should have a mechanism to authenticate peer, perhaps TLS
-        let message = match Message::recv_timeout(&stream, self.config.heartbeat_timeout) {
+        stream
+            .set_read_timeout(Some(self.config.heartbeat_timeout * 3))
+            .expect("Can't set stream read timeout");
+        let message = match Message::recv(&stream) {
             Ok(message) => message,
             Err(e) => {
                 console::error!(&e, "Could not receive client handshake message");
@@ -568,14 +589,12 @@ impl Server {
         };
 
         if let Message::Join(peer_id) = message {
-            let result = Message::send(
-                &stream,
-                &Message::JoinAck {
-                    peer_id: self.config.id,
-                    leases: self.dhcp_service.leases.clone(),
-                },
-            );
-            match result {
+            match (Message::JoinAck {
+                peer_id: self.config.id,
+                leases: self.dhcp_service.leases.clone(),
+            })
+            .send(&stream)
+            {
                 Ok(()) => {
                     console::log!("Peer {peer_id} joined");
 

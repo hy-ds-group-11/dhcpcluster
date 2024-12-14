@@ -32,10 +32,6 @@ pub enum Event {
     EstablishedPeerConnection(JoinSuccess),
     PeerLost(peer::Id),
     ElectionTimeout,
-    PeerMessage {
-        sender_id: peer::Id,
-        message: Message,
-    },
     LeaseRequest {
         mac_address: MacAddr,
         tx: Sender<LeaseOffer>,
@@ -44,6 +40,10 @@ pub enum Event {
         mac_address: MacAddr,
         ip: Ipv4Addr,
         tx: Sender<LeaseConfirmation>,
+    },
+    PeerMessage {
+        sender_id: peer::Id,
+        message: Message,
     },
 }
 
@@ -184,9 +184,6 @@ impl Server {
                 }
                 Event::PeerLost(peer_id) => self.remove_peer(peer_id),
                 Event::ElectionTimeout => self.finish_election(),
-                Event::PeerMessage { sender_id, message } => {
-                    self.handle_peer_message(sender_id, message);
-                }
                 Event::LeaseRequest { mac_address, tx } => {
                     self.handle_lease_request(mac_address, &tx);
                 }
@@ -195,6 +192,9 @@ impl Server {
                     ip,
                     tx,
                 } => self.handle_confirm_request(mac_address, ip, &tx),
+                Event::PeerMessage { sender_id, message } => {
+                    self.handle_peer_message(sender_id, message);
+                }
             }
         }
     }
@@ -233,119 +233,35 @@ impl Server {
         console::debug!("Connection threads spawned");
     }
 
-    fn handle_peer_message(&mut self, sender_id: peer::Id, message: Message) {
-        match message {
-            Message::Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
-            Message::Election => self.handle_election(sender_id, &message),
-            Message::Okay => self.handle_okay(sender_id, &message),
-            Message::Coordinator => self.handle_coordinator(sender_id),
-            Message::Lease(lease) => self.handle_add_lease(lease),
-            Message::SetPool(update) => self.handle_set_pool(update),
-            Message::SetMajority(majority) => self.handle_majority(majority),
-            Message::Join(..) | Message::JoinAck { .. } => {
-                console::warning!("Server received unexpected {message:?} from peer {sender_id}");
-            }
-        };
-    }
+    fn become_coordinator(&mut self) {
+        self.election_state = ElectionState::Coordinator;
+        self.coordinator_id = Some(self.config.id);
+        let majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
+        self.handle_majority(majority);
 
-    fn handle_set_pool(&mut self, pool: Ipv4Range) {
-        console::log!("Set pool to {}", pool);
-        self.dhcp_service.set_pool(pool);
-    }
-
-    fn handle_election(&mut self, sender_id: peer::Id, message: &Message) {
-        console::log!("Peer {sender_id} invited {message:?}");
-        if sender_id < self.config.id {
-            console::log!("Received Election from lower id");
-            self.peers
-                .get(&sender_id)
-                .expect("Invariant violated: server.peers must contain election message sender")
-                .send_message(Message::Okay);
-            self.start_election();
-        }
-    }
-
-    fn handle_okay(&mut self, sender_id: peer::Id, message: &Message) {
-        assert!(sender_id > self.config.id);
-        console::log!("Peer {sender_id}: {message:?}, ");
-        if self.election_state == ElectionState::WaitingForElection {
-            console::log!("Stepping down to Follower");
-            self.election_state = ElectionState::Follower;
-        } else {
-            console::log!("Already stepped down");
-        }
-    }
-
-    fn handle_coordinator(&mut self, sender_id: peer::Id) {
-        console::log!("Recognizing {sender_id} as Coordinator");
-        self.coordinator_id = Some(sender_id);
-        self.election_state = ElectionState::Follower;
-        if sender_id < self.config.id {
-            self.start_election();
-        }
-    }
-
-    fn handle_majority(&mut self, majority: bool) {
-        if self.majority != majority {
-            console::log!("{} majority", if majority { "Reached" } else { "Lost" });
-            self.majority = majority;
-        }
-    }
-
-    fn handle_add_lease(&mut self, lease: Lease) {
-        self.dhcp_service.add_lease(lease);
-    }
-
-    fn handle_lease_request(&mut self, mac_address: MacAddr, tx: &Sender<LeaseOffer>) {
-        if !self.majority {
-            return;
+        for peer in self.peers.values() {
+            peer.send_message(Message::Coordinator);
+            peer.send_message(Message::SetMajority(self.majority));
         }
 
-        if let Some(lease) = self.dhcp_service.discover_lease(mac_address) {
-            if let Err(e) = tx.send(LeaseOffer {
-                lease,
-                subnet_mask: self.config.prefix_length,
-            }) {
-                console::error!(
-                    &e,
-                    "Could not reply to client worker which requested a lease"
-                );
-            }
-        }
-    }
+        #[allow(
+            clippy::unwrap_used,
+            reason = "Having more DHCP nodes than IPv4 addresses is nonsense"
+        )]
+        let pools = self
+            .config
+            .dhcp_pool
+            // +1 to account for the coordinator
+            .divide(u32::try_from(self.peers.len()).unwrap() + 1);
 
-    fn handle_confirm_request(
-        &mut self,
-        mac_address: MacAddr,
-        ip: Ipv4Addr,
-        tx: &Sender<LeaseConfirmation>,
-    ) {
-        if !self.majority {
-            return;
-        }
+        let mut pools_iter = pools.into_iter();
 
-        match self.dhcp_service.commit_lease(mac_address, ip) {
-            Ok(lease) => {
-                if let Err(e) = tx.send(true) {
-                    console::error!(
-                        &e,
-                        "Could not send lease confirmation to the worker which requested it"
-                    );
-                }
-                for peer in self.peers.values() {
-                    peer.send_message(Message::Lease(lease.clone()));
-                }
-            }
-            Err(e) => {
-                console::error!(&e, "Can't confirm lease");
-                if let Err(e) = tx.send(false) {
-                    console::error!(
-                        &e,
-                        "Could not send lease denial to the worker which requested it"
-                    );
-                }
-            }
-        };
+        // Set own pool
+        self.handle_set_pool(pools_iter.next().expect("Pools should always exist"));
+
+        for (pool, peer) in pools_iter.zip(self.peers.values()) {
+            peer.send_message(Message::SetPool(pool));
+        }
     }
 
     fn answer_handshake(&mut self, mut stream: TcpStream) {
@@ -470,36 +386,124 @@ impl Server {
         }
     }
 
-    fn become_coordinator(&mut self) {
-        self.election_state = ElectionState::Coordinator;
-        self.coordinator_id = Some(self.config.id);
-        let majority = self.peers.len() + 1 > (self.config.peers.len() + 1) / 2;
-        self.handle_majority(majority);
-
-        for peer in self.peers.values() {
-            peer.send_message(Message::Coordinator);
-            peer.send_message(Message::SetMajority(self.majority));
+    fn handle_lease_request(&mut self, mac_address: MacAddr, tx: &Sender<LeaseOffer>) {
+        if !self.majority {
+            return;
         }
 
-        #[allow(
-            clippy::unwrap_used,
-            reason = "Having more DHCP nodes than IPv4 addresses is nonsense"
-        )]
-        let pools = self
-            .config
-            .dhcp_pool
-            // +1 to account for the coordinator
-            .divide(u32::try_from(self.peers.len()).unwrap() + 1);
-
-        let mut pools_iter = pools.into_iter();
-
-        // Set own pool
-        self.handle_set_pool(pools_iter.next().expect("Pools should always exist"));
-
-        for (pool, peer) in pools_iter.zip(self.peers.values()) {
-            peer.send_message(Message::SetPool(pool));
+        if let Some(lease) = self.dhcp_service.discover_lease(mac_address) {
+            if let Err(e) = tx.send(LeaseOffer {
+                lease,
+                subnet_mask: self.config.prefix_length,
+            }) {
+                console::error!(
+                    &e,
+                    "Could not reply to client worker which requested a lease"
+                );
+            }
         }
     }
+
+    fn handle_confirm_request(
+        &mut self,
+        mac_address: MacAddr,
+        ip: Ipv4Addr,
+        tx: &Sender<LeaseConfirmation>,
+    ) {
+        if !self.majority {
+            return;
+        }
+
+        match self.dhcp_service.commit_lease(mac_address, ip) {
+            Ok(lease) => {
+                if let Err(e) = tx.send(true) {
+                    console::error!(
+                        &e,
+                        "Could not send lease confirmation to the worker which requested it"
+                    );
+                }
+                for peer in self.peers.values() {
+                    peer.send_message(Message::Lease(lease.clone()));
+                }
+            }
+            Err(e) => {
+                console::error!(&e, "Can't confirm lease");
+                if let Err(e) = tx.send(false) {
+                    console::error!(
+                        &e,
+                        "Could not send lease denial to the worker which requested it"
+                    );
+                }
+            }
+        };
+    }
+
+    // --- Begin Region: Peer message handlers ---
+
+    fn handle_peer_message(&mut self, sender_id: peer::Id, message: Message) {
+        match message {
+            Message::Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
+            Message::Election => self.handle_election(sender_id),
+            Message::Okay => self.handle_okay(sender_id),
+            Message::Coordinator => self.handle_coordinator(sender_id),
+            Message::Lease(lease) => self.handle_add_lease(lease),
+            Message::SetPool(update) => self.handle_set_pool(update),
+            Message::SetMajority(majority) => self.handle_majority(majority),
+            Message::Join(..) | Message::JoinAck { .. } => {
+                console::warning!("Server received unexpected {message:?} from peer {sender_id}");
+            }
+        };
+    }
+
+    fn handle_election(&mut self, sender_id: peer::Id) {
+        console::log!("Peer {sender_id} sent Election");
+        if sender_id < self.config.id {
+            console::log!("Received Election from lower id");
+            self.peers
+                .get(&sender_id)
+                .expect("Invariant violated: server.peers must contain election message sender")
+                .send_message(Message::Okay);
+            self.start_election();
+        }
+    }
+
+    fn handle_okay(&mut self, sender_id: peer::Id) {
+        assert!(sender_id > self.config.id);
+        console::log!("Peer {sender_id} sent Okay");
+        if self.election_state == ElectionState::WaitingForElection {
+            console::log!("Stepping down to Follower");
+            self.election_state = ElectionState::Follower;
+        } else {
+            console::log!("Already stepped down");
+        }
+    }
+
+    fn handle_coordinator(&mut self, sender_id: peer::Id) {
+        console::log!("Recognizing {sender_id} as Coordinator");
+        self.coordinator_id = Some(sender_id);
+        self.election_state = ElectionState::Follower;
+        if sender_id < self.config.id {
+            self.start_election();
+        }
+    }
+
+    fn handle_add_lease(&mut self, lease: Lease) {
+        self.dhcp_service.add_lease(lease);
+    }
+
+    fn handle_set_pool(&mut self, pool: Ipv4Range) {
+        console::log!("Set pool to {}", pool);
+        self.dhcp_service.set_pool(pool);
+    }
+
+    fn handle_majority(&mut self, majority: bool) {
+        if self.majority != majority {
+            console::log!("{} majority", if majority { "Reached" } else { "Lost" });
+            self.majority = majority;
+        }
+    }
+
+    // --- End Region: Peer message handlers ---
 }
 
 impl Display for Server {

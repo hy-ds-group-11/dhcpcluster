@@ -58,7 +58,7 @@ jobs:
           elif [[ ${{ matrix.platform.os-name }} == Windows* ]]; then
             mv ${{ matrix.platform.target }}/release/client.exe client.exe
             mv ${{ matrix.platform.target }}/release/server-node.exe server.exe
-            zip dhcpcluster-${{ matrix.platform.os-name }}.zip client.exe server.exe client-config-template.toml server-config-template.toml
+            pwsh -Command "Compress-Archive -Path client.exe,server.exe,client-config-template.toml,server-config-template.toml -Destination dhcpcluster-${{ matrix.platform.os-name }}.zip"
           elif [[ ${{ matrix.platform.os-name }} == MacOS* ]]; then
             mv ${{ matrix.platform.target }}/release/client client
             mv ${{ matrix.platform.target }}/release/server-node server

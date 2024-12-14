@@ -1,3 +1,6 @@
+//! This crate defines a custom client-server (relay agent to cluster) protocol.
+//! In a final version of this software, this protocol should be replaced by the actual DHCP protocol.
+
 #![deny(clippy::unwrap_used, clippy::allow_attributes_without_reason)]
 #![warn(clippy::perf, clippy::complexity, clippy::pedantic, clippy::suspicious)]
 #![allow(
@@ -9,9 +12,6 @@
     clippy::cast_precision_loss,
     reason = "There are no sufficient floating point types"
 )]
-
-//! This crate defines a custom client-server (relay agent to cluster) protocol.
-//! In a final version of this software, this protocol should be replaced by the actual DHCP protocol.
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{

@@ -1,6 +1,12 @@
 pub mod message;
 
-use crate::{config::Config, console, dhcp::Lease, server::Event, ThreadJoin};
+use crate::{
+    config::{self, Config},
+    console,
+    dhcp::Lease,
+    server::Event,
+    ThreadJoin,
+};
 use message::Message;
 use protocol::{RecvCbor, SendCbor};
 use std::{
@@ -79,30 +85,29 @@ impl Peer {
     /// Initiate peer connection
     pub fn connect(
         config: &Arc<Config>,
-        peer_id: Id,
-        name: &str,
+        peer: &config::Peer,
         server_tx: &Sender<Event>,
     ) -> Result<JoinSuccess, HandshakeError> {
         let timeout = config.connect_timeout;
+        let peer_id = peer.id;
+        let name = &peer.host;
+
         console::debug!("Connecting to {peer_id} at {name}");
 
         // Resolve address
-        let mut addrs = name
+        let mut addrs = peer
+            .host
             .to_socket_addrs()
             .map_err(|e| HandshakeError::NameResolution {
                 peer_id,
-                name: name.to_owned(),
+                name: name.clone(),
                 source: e,
             })?
             .peekable();
 
         // Try every result
         while let Some(addr) = addrs.next() {
-            let stream = match if let Some(timeout) = timeout {
-                TcpStream::connect_timeout(&addr, timeout)
-            } else {
-                TcpStream::connect(addr)
-            } {
+            let stream = match TcpStream::connect_timeout(&addr, timeout) {
                 Ok(stream) => stream,
                 Err(e) => match addrs.peek() {
                     Some(_) => continue, // Retry next result if available

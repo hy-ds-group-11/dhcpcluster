@@ -2,7 +2,7 @@ pub mod client;
 pub mod peer;
 
 use crate::{
-    config::{self, Config},
+    config::Config,
     console,
     dhcp::{self, Ipv4Range, Lease, LeaseOffer},
     ThreadJoin,
@@ -16,7 +16,7 @@ use std::{
     fmt::Display,
     net::{Ipv4Addr, TcpListener, TcpStream},
     sync::{
-        mpsc::{self, Receiver, Sender},
+        mpsc::{self, Receiver, RecvTimeoutError, Sender},
         Arc,
     },
     thread,
@@ -54,14 +54,6 @@ enum ElectionState {
     Follower,
 }
 
-// Don't spam (re)connection, keep track of last attempt time
-#[derive(Debug)]
-enum ConnectAttempt {
-    Never,
-    Running,
-    Finished(SystemTime),
-}
-
 /// The distributed DHCP server
 pub struct Server {
     config: Arc<Config>,
@@ -72,7 +64,6 @@ pub struct Server {
     peers: HashMap<peer::Id, Peer>,
     election_state: ElectionState,
     majority: bool,
-    last_connect_attempt: ConnectAttempt,
 }
 
 impl Server {
@@ -112,7 +103,6 @@ impl Server {
             peers: HashMap::new(),
             election_state: ElectionState::Follower,
             majority: false,
-            last_connect_attempt: ConnectAttempt::Never,
         };
 
         let peer_listener_thread = {
@@ -146,26 +136,25 @@ impl Server {
     }
 
     fn run_event_loop(&mut self, server_rx: &Receiver<Event>) {
+        let mut last_connect_attempt = SystemTime::UNIX_EPOCH;
+
         loop {
             // Render pretty text representation if running in a terminal
             console::update_state(format!("{self}"));
 
             // Periodically check if server needs to connect to peers
-            match self.last_connect_attempt {
-                ConnectAttempt::Never => self.attempt_connect(),
-                ConnectAttempt::Finished(at) => {
-                    if at.elapsed().unwrap_or(Duration::ZERO) > self.config.heartbeat_timeout {
-                        self.attempt_connect();
-                    }
-                }
-                ConnectAttempt::Running => {}
-            };
+            if last_connect_attempt.elapsed().unwrap_or(Duration::ZERO)
+                > self.config.connect_timeout
+            {
+                last_connect_attempt = SystemTime::now();
+                self.attempt_connect();
+            }
 
             // Receive the next message from other threads (peer I/O, listeners, timers etc.)
-            let message = match server_rx.recv_timeout(self.config.heartbeat_timeout) {
+            let message = match server_rx.recv_timeout(self.config.connect_timeout) {
                 Ok(message) => message,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
             };
 
             match message {
@@ -204,36 +193,34 @@ impl Server {
     }
 
     fn attempt_connect(&mut self) {
-        self.last_connect_attempt = ConnectAttempt::Running;
         console::debug!("Connection attempt started");
-
-        for config::Peer { id, host } in &self.config.peers {
+        for peer in &self.config.peers {
             // Only start connections with peers we don't have a connection with
             // Always have the higher ID start connections to avoid race conditions with concurrent
             // handshakes
-            if !self.peers.contains_key(id) && self.config.id > *id {
+            if !self.peers.contains_key(&peer.id) && self.config.id > peer.id {
                 let config = Arc::clone(&self.config);
-                let peer_id = *id;
-                let name = host.to_owned();
+                let peer = peer.clone();
                 let server_tx = self.tx.clone();
                 self.thread_pool
-                    .execute(
-                        move || match Peer::connect(&config, peer_id, &name, &server_tx) {
-                            Ok(success) => {
-                                server_tx
-                                    .send(Event::EstablishedPeerConnection(success))
-                                    .expect("Invariant violated: server_rx has been dropped");
-                            }
-                            Err(e) => {
-                                console::error!(&e, "Can't connect to peer {peer_id} at {name}");
-                            }
-                        },
-                    )
+                    .execute(move || match Peer::connect(&config, &peer, &server_tx) {
+                        Ok(success) => {
+                            server_tx
+                                .send(Event::EstablishedPeerConnection(success))
+                                .expect("Invariant violated: server_rx has been dropped");
+                        }
+                        Err(e) => {
+                            console::error!(
+                                &e,
+                                "Can't connect to peer {} at {}",
+                                peer.id,
+                                peer.host
+                            );
+                        }
+                    })
                     .expect("Thread pool cannot spawn treads");
             }
         }
-
-        self.last_connect_attempt = ConnectAttempt::Finished(SystemTime::now());
         console::debug!("Connection threads spawned");
     }
 

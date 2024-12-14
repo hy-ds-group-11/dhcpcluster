@@ -1,4 +1,16 @@
 //! # Server Configuration and TOML File Loading
+
+//! # DHCP Cluster - Server Implementation
+//!
+//! This crate contains a distributed DHCP server implementation, with a custom protocol between nodes.
+//!
+//! For the protocol definition, look into the [`server::peer::message`] module.
+//!
+//! The server architecture comprises of threads, which use blocking operations to communicate over [`std::net::TcpStream`]s.
+//! There are two threads per active peer, one for receiving messages and one for sending messages.
+//! There is also a server logic thread, handling bookkeeping for the peer- and client events.
+//!
+//! For the communication thread implementation, look into the [`server::peer`] module.
 //!
 //! This module contains the server configuration structure, along with facilities for
 //! loading configuration files from the filesystem.
@@ -37,7 +49,7 @@ pub struct ClusterSection {
     connect_timeout_seconds: Option<u64>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 pub struct Peer {
     pub id: peer::Id,
     pub host: String,
@@ -67,7 +79,7 @@ pub struct Config {
 
     pub id: peer::Id,
     pub heartbeat_timeout: Duration,
-    pub connect_timeout: Option<Duration>,
+    pub connect_timeout: Duration,
     pub peers: Vec<Peer>,
 }
 
@@ -108,9 +120,8 @@ impl From<File> for Config {
             heartbeat_timeout: Duration::from_millis(cluster.heartbeat_timeout_millis),
             connect_timeout: cluster
                 .connect_timeout_seconds
-                .map_or(Some(Duration::from_secs(10)), |sec| {
-                    (sec != 0).then_some(Duration::from_secs(sec))
-                }),
+                .and_then(|sec| (sec != 0).then_some(Duration::from_secs(sec)))
+                .unwrap_or(Duration::from_secs(10)),
             peers: file.peers,
         }
     }

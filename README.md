@@ -31,3 +31,7 @@ The software is currently _prototype quality_, it's not intended for production 
 | [48](doc/week48.md) | :revolving_hearts: Peer heartbeat messages, thread shutdown                       |
 | [49](doc/week49.md) | :1234::computer: Leader election, address pool distribution, client CLI           |
 | [50](doc/week50.md) | :sparkles: DHCP functionality and client-server communication                     |
+
+## Downloads
+
+[See: Releases](https://github.com/hy-ds-group-11/dhcpcluster/releases)

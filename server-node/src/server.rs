@@ -1,14 +1,13 @@
 use crate::{
     config::Config,
     console,
-    dhcp::{self, Ipv4Range, Lease},
+    dhcp::{self, Ipv4Range, Lease, LeaseOffer},
     message::Message,
     peer::{self, HandshakeError, JoinSuccess, Peer},
     ThreadJoin,
 };
 use protocol::{
-    CborRecvError, DhcpClientMessage, DhcpOffer, DhcpServerMessage, MacAddr, RecvCbor, RecvError,
-    SendCbor,
+    CborRecvError, DhcpClientMessage, DhcpServerMessage, MacAddr, RecvCbor, RecvError, SendCbor,
 };
 use std::{
     any::Any,
@@ -25,12 +24,6 @@ use std::{
 };
 use thiserror::Error;
 use thread_pool::ThreadPool;
-
-#[derive(Debug)]
-pub struct LeaseOffer {
-    lease: Lease,
-    subnet_mask: u32,
-}
 
 type LeaseConfirmation = bool;
 
@@ -321,37 +314,21 @@ impl Server {
             .send(MainThreadMessage::LeaseRequest { mac_address, tx })
             .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
 
-        // Wait for processing DHCP discover
-        let Ok(LeaseOffer { lease, subnet_mask }) = rx.recv() else {
+        // Wait for main thread to process DHCP discover
+        let Ok(offer) = rx.recv() else {
             if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
                 console::error!(&e, "Could not reply with Nack to the client");
             }
             return;
         };
 
-        let ip = lease.address;
-
-        #[allow(
-            clippy::unwrap_used,
-            reason = "Lease time originally u32 in Config, only gets smaller"
-        )]
-        let lease_time = lease
-            .expiry_timestamp
-            .duration_since(SystemTime::now())
-            .unwrap_or(Duration::ZERO)
-            .as_secs()
-            .try_into()
-            .unwrap();
-
-        if let Err(e) = stream.send(&DhcpServerMessage::Offer(DhcpOffer {
-            ip,
-            lease_time,
-            subnet_mask,
-        })) {
+        // Send main thread's offer to the client
+        if let Err(e) = stream.send(&DhcpServerMessage::Offer(offer.into())) {
             console::error!(&e, "Could not send offer to the client");
             return;
         }
 
+        // Listen for client's confirmation. TODO: with real DHCP, this goes elsewhere
         match stream.recv() {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 let (tx, rx) = mpsc::channel();

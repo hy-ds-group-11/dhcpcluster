@@ -7,12 +7,41 @@ use std::{
 };
 use thiserror::Error;
 
-/// A DHCP Lease
+/// A DHCP Lease to be stored in [`Service`]
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Lease {
     pub hardware_address: MacAddr,    // Assume MAC address
     pub address: Ipv4Addr,            // Assume IPv4 for now
     pub expiry_timestamp: SystemTime, // SystemTime as exact time is not critical, and we want a timestamp
+}
+
+/// A DHCP Lease offer to send to the client
+#[derive(Debug)]
+pub struct LeaseOffer {
+    pub lease: Lease,
+    pub subnet_mask: u32,
+}
+
+impl From<LeaseOffer> for protocol::DhcpOffer {
+    fn from(LeaseOffer { lease, subnet_mask }: LeaseOffer) -> Self {
+        #[allow(
+            clippy::unwrap_used,
+            reason = "Lease time originally u32 in Config, only gets smaller"
+        )]
+        let lease_time = lease
+            .expiry_timestamp
+            .duration_since(SystemTime::now())
+            .unwrap_or(Duration::ZERO)
+            .as_secs()
+            .try_into()
+            .unwrap();
+
+        Self {
+            ip: lease.address,
+            lease_time,
+            subnet_mask,
+        }
+    }
 }
 
 /// IPv4 address pool to serve. `end` not included.

@@ -29,7 +29,6 @@ use std::thread::{self, JoinHandle};
 pub mod config;
 pub mod console;
 pub mod dhcp;
-pub mod message;
 pub mod server;
 
 pub trait ThreadJoin: Sized {

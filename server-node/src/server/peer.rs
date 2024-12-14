@@ -1,4 +1,7 @@
-use crate::{config::Config, console, dhcp::Lease, message::Message, server::Event, ThreadJoin};
+pub mod message;
+
+use crate::{config::Config, console, dhcp::Lease, server::Event, ThreadJoin};
+use message::Message;
 use protocol::{RecvCbor, SendCbor};
 use std::{
     fmt::Display,

@@ -5,9 +5,9 @@ use crate::{
     config::Config,
     console,
     dhcp::{self, Ipv4Range, Lease, LeaseOffer},
-    message::Message,
     ThreadJoin,
 };
+use peer::message::Message;
 use peer::{HandshakeError, JoinSuccess, Peer};
 use protocol::{MacAddr, RecvCbor, SendCbor};
 use std::{

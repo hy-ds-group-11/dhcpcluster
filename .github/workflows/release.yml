@@ -38,17 +38,16 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: "--locked --release"
           strip: true
-      - name: Publish server-node
-        uses: houseabsolute/actions-rust-release@v0
+      - name: Rename client
+        run: mv target/client client-${{ matrix.platform.target }}
+      - name: Rename server-node
+        run: mv target/server-node server-${{ matrix.platform.target }}
+      - name: Debug listing
+        run: tree
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
         with:
-          changes-file:
-          executable-name: server-node
-          extra-files: server-node/config-template.toml
-          target: ${{ matrix.platform.target }}
-      - name: Publish client
-        uses: houseabsolute/actions-rust-release@v0
-        with:
-          changes-file:
-          executable-name: client
-          extra-files:
-          target: ${{ matrix.platform.target }}
+          files: |
+            client-${{ matrix.platform.target }}
+            server-${{ matrix.platform.target }}
+            server-node/config-template.toml

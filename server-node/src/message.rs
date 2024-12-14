@@ -12,6 +12,7 @@ use crate::{
 };
 use protocol::{RecvCbor, SendCbor};
 use serde::{Deserialize, Serialize};
+use std::net::TcpStream;
 
 /// # A server-to-server message
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
@@ -30,5 +31,5 @@ pub enum Message {
     SetMajority(bool),
 }
 
-impl RecvCbor for Message {}
-impl SendCbor for Message {}
+impl RecvCbor<Message> for TcpStream {}
+impl SendCbor<Message> for TcpStream {}

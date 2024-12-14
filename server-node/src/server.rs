@@ -289,14 +289,14 @@ impl Server {
     }
 
     fn serve_client(
-        stream: &TcpStream,
+        stream: &mut TcpStream,
         config: &Arc<Config>,
         server_tx: &Sender<MainThreadMessage>,
     ) {
         stream
             .set_read_timeout(Some(config.client_timeout))
             .expect("Can't set stream read timeout");
-        let result = DhcpClientMessage::recv(stream);
+        let result = stream.recv();
         match result {
             Ok(DhcpClientMessage::Discover { mac_address }) => {
                 Self::handle_discover(stream, server_tx, mac_address);
@@ -309,7 +309,7 @@ impl Server {
     }
 
     fn handle_discover(
-        stream: &TcpStream,
+        stream: &mut TcpStream,
         server_tx: &Sender<MainThreadMessage>,
         mac_address: MacAddr,
     ) {
@@ -323,7 +323,7 @@ impl Server {
 
         // Wait for processing DHCP discover
         let Ok(LeaseOffer { lease, subnet_mask }) = rx.recv() else {
-            if let Err(e) = DhcpServerMessage::Nack.send(stream) {
+            if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
                 console::error!(&e, "Could not reply with Nack to the client");
             }
             return;
@@ -343,18 +343,16 @@ impl Server {
             .try_into()
             .unwrap();
 
-        if let Err(e) = DhcpServerMessage::Offer(DhcpOffer {
+        if let Err(e) = stream.send(&DhcpServerMessage::Offer(DhcpOffer {
             ip,
             lease_time,
             subnet_mask,
-        })
-        .send(stream)
-        {
+        })) {
             console::error!(&e, "Could not send offer to the client");
             return;
         }
 
-        match DhcpClientMessage::recv(stream) {
+        match stream.recv() {
             Ok(DhcpClientMessage::Request { mac_address, ip }) => {
                 let (tx, rx) = mpsc::channel();
                 server_tx
@@ -368,10 +366,10 @@ impl Server {
                 match rx.recv() {
                     Ok(committed) => {
                         if committed {
-                            if let Err(e) = DhcpServerMessage::Ack.send(stream) {
+                            if let Err(e) = stream.send(&DhcpServerMessage::Ack) {
                                 console::error!(&e, "Could not send Ack to the client");
                             }
-                        } else if let Err(e) = DhcpServerMessage::Nack.send(stream) {
+                        } else if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
                             console::error!(&e, "Could not send Nack to the client");
                         }
                     }
@@ -405,7 +403,7 @@ impl Server {
     }
 
     fn handle_renew(
-        stream: &TcpStream,
+        stream: &mut TcpStream,
         server_tx: &Sender<MainThreadMessage>,
         mac_address: MacAddr,
         ip: Ipv4Addr,
@@ -422,10 +420,10 @@ impl Server {
             })
             .expect("Invariant violated: server_rx has been dropped before joining client listener thread");
         if rx.recv().unwrap_or(false) {
-            if let Err(e) = DhcpServerMessage::Ack.send(stream) {
+            if let Err(e) = stream.send(&DhcpServerMessage::Ack) {
                 console::error!(&e, "Could not send Ack to the client");
             }
-        } else if let Err(e) = DhcpServerMessage::Nack.send(stream) {
+        } else if let Err(e) = stream.send(&DhcpServerMessage::Nack) {
             console::error!(&e, "Could not send Nack to the client");
         }
     }
@@ -563,11 +561,11 @@ impl Server {
     ) {
         for stream in listener.incoming() {
             match stream {
-                Ok(stream) => {
+                Ok(mut stream) => {
                     let config = Arc::clone(config);
                     let tx = server_tx.clone();
                     thread_pool
-                        .execute(move || Self::serve_client(&stream, &config, &tx))
+                        .execute(move || Self::serve_client(&mut stream, &config, &tx))
                         .expect("Thread pool cannot spawn threads");
                 }
                 Err(e) => console::error!(&e, "Accepting new client connection failed"),
@@ -575,12 +573,12 @@ impl Server {
         }
     }
 
-    fn answer_handshake(&mut self, stream: TcpStream) {
+    fn answer_handshake(&mut self, mut stream: TcpStream) {
         // TODO: security: we should have a mechanism to authenticate peer, perhaps TLS
         stream
             .set_read_timeout(Some(self.config.heartbeat_timeout * 3))
             .expect("Can't set stream read timeout");
-        let message = match Message::recv(&stream) {
+        let message = match stream.recv() {
             Ok(message) => message,
             Err(e) => {
                 console::error!(&e, "Could not receive client handshake message");
@@ -589,12 +587,10 @@ impl Server {
         };
 
         if let Message::Join(peer_id) = message {
-            match (Message::JoinAck {
+            match stream.send(&Message::JoinAck {
                 peer_id: self.config.id,
                 leases: self.dhcp_service.leases.clone(),
-            })
-            .send(&stream)
-            {
+            }) {
                 Ok(()) => {
                     console::log!("Peer {peer_id} joined");
 

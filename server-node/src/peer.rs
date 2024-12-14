@@ -49,7 +49,7 @@ pub struct Peer {
 impl Peer {
     #[must_use]
     pub fn new(
-        stream: TcpStream,
+        mut stream: TcpStream,
         id: Id,
         server_tx: Sender<MainThreadMessage>,
         heartbeat_timeout: Duration,
@@ -58,7 +58,7 @@ impl Peer {
         let (tx, rx) = mpsc::channel();
         let terminated = Arc::new(AtomicBool::new(false));
 
-        let stream_read = stream.try_clone().expect("Cannot clone TcpStream!");
+        let mut stream_read = stream.try_clone().expect("Cannot clone TcpStream!");
         // Set read to timeout if three heartbeats are missed. Three was chosen arbitrarily
         stream_read
             .set_read_timeout(Some(3 * heartbeat_timeout))
@@ -68,13 +68,13 @@ impl Peer {
             let terminated = Arc::clone(&terminated);
             thread::Builder::new()
                 .name(format!("{}::read_thread({})", module_path!(), id))
-                .spawn(move || Self::read_thread_fn(&stream_read, id, &server_tx, &terminated))
+                .spawn(move || Self::read_thread_fn(&mut stream_read, id, &server_tx, &terminated))
                 .expect("Cannot spawn peer read thread")
         };
 
         let write_thread = thread::Builder::new()
             .name(format!("{}::write_thread({})", module_path!(), id))
-            .spawn(move || Self::write_thread_fn(&stream, id, &rx, heartbeat_timeout))
+            .spawn(move || Self::write_thread_fn(&mut stream, id, &rx, heartbeat_timeout))
             .expect("Cannot spawn peer write thread");
 
         Self {
@@ -87,7 +87,7 @@ impl Peer {
     }
 
     pub fn start_handshake(
-        stream: TcpStream,
+        mut stream: TcpStream,
         config: &Arc<Config>,
         server_tx: Sender<MainThreadMessage>,
     ) -> Result<JoinSuccess, HandshakeError> {
@@ -95,8 +95,8 @@ impl Peer {
             .set_read_timeout(Some(config.heartbeat_timeout * 3))
             .expect("Can't set stream read timeout");
 
-        Message::Join(config.id).send(&stream)?;
-        match Message::recv(&stream)? {
+        stream.send(&Message::Join(config.id))?;
+        match stream.recv()? {
             Message::JoinAck { peer_id, leases } => {
                 console::log!("Connected to peer {peer_id}");
                 Ok(JoinSuccess {
@@ -121,14 +121,14 @@ impl Peer {
     }
 
     fn read_thread_fn(
-        stream: &TcpStream,
+        stream: &mut TcpStream,
         peer_id: Id,
         server_tx: &Sender<MainThreadMessage>,
         terminated: &Arc<AtomicBool>,
     ) {
         // This will not block forever, it will eventually time out,
         // as set_read_timeout was called in Peer::new
-        while let Ok(message) = Message::recv(stream) {
+        while let Ok(message) = stream.recv() {
             match message {
                 Message::Join(_) | Message::JoinAck { .. } => {
                     console::warning!("Peer {peer_id} tried to send {message:?} after handshake");
@@ -154,17 +154,22 @@ impl Peer {
         console::log!("Connection to peer {peer_id} lost");
     }
 
-    fn write_thread_fn(stream: &TcpStream, peer_id: Id, rx: &Receiver<Message>, timeout: Duration) {
+    fn write_thread_fn(
+        stream: &mut TcpStream,
+        peer_id: Id,
+        rx: &Receiver<Message>,
+        timeout: Duration,
+    ) {
         loop {
             match rx.recv_timeout(timeout) {
                 Ok(message) => {
-                    if let Err(e) = message.send(stream) {
+                    if let Err(e) = stream.send(&message) {
                         console::error!(&e, "Failed to send {message:?} to peer {peer_id}");
                         break;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if let Err(e) = Message::Heartbeat.send(stream) {
+                    if let Err(e) = stream.send(&Message::Heartbeat) {
                         console::error!(&e, "Failed to send heartbeat to peer {peer_id}");
                         break;
                     }

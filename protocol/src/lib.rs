@@ -13,9 +13,10 @@
 //! This crate defines a custom client-server (relay agent to cluster) protocol.
 //! In a final version of this software, this protocol should be replaced by the actual DHCP protocol.
 
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::{
     fmt::Display,
+    io::{Read, Write},
     net::{Ipv4Addr, TcpStream},
     num::ParseIntError,
     str::FromStr,
@@ -127,24 +128,23 @@ pub enum CborSendError {
     Send(#[from] SendError),
 }
 
-// The temporary timeout setting may be fragile
-pub trait RecvCbor: Sized + for<'a> Deserialize<'a> {
-    /// # Read a message from a [`TcpStream`].
+pub trait RecvCbor<M: DeserializeOwned>: Sized + Read {
+    /// # Receive a message from self
     /// This function can block the calling thread for the stream's current read timeout setting
     /// (see [`TcpStream::set_read_timeout`]).
-    fn recv(stream: &TcpStream) -> Result<Self, CborRecvError> {
-        Ok(ciborium::from_reader(stream)?)
+    fn recv(&mut self) -> Result<M, CborRecvError> {
+        Ok(ciborium::from_reader(self)?)
     }
 }
 
-pub trait SendCbor: Sized + Serialize {
-    /// # Send a message over a [`TcpStream`]
-    fn send(&self, stream: &TcpStream) -> Result<(), CborSendError> {
-        Ok(ciborium::into_writer(self, stream)?)
+pub trait SendCbor<M: Serialize>: Sized + Write {
+    /// # Send a message over self
+    fn send(&mut self, message: &M) -> Result<(), CborSendError> {
+        Ok(ciborium::into_writer(message, self)?)
     }
 }
 
-impl RecvCbor for DhcpClientMessage {}
-impl SendCbor for DhcpClientMessage {}
-impl RecvCbor for DhcpServerMessage {}
-impl SendCbor for DhcpServerMessage {}
+impl RecvCbor<DhcpClientMessage> for TcpStream {}
+impl SendCbor<DhcpClientMessage> for TcpStream {}
+impl RecvCbor<DhcpServerMessage> for TcpStream {}
+impl SendCbor<DhcpServerMessage> for TcpStream {}

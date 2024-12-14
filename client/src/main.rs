@@ -298,8 +298,8 @@ fn query(
     let mut addrs = get_addresses(server, default_port)?;
 
     while let Some(addr) = addrs.next() {
-        let stream = connect_timeout(&addr, timeout, server)?;
-        match client::get_offer(&stream, mac_address) {
+        let mut stream = connect_timeout(&addr, timeout, server)?;
+        match client::get_offer(&mut stream, mac_address) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
                 None => {
@@ -310,7 +310,7 @@ fn query(
                 }
             },
             Ok(Some(offer @ DhcpOffer { ip, .. })) => {
-                if client::get_ack(&stream, mac_address, ip).map_err(|e| {
+                if client::get_ack(&mut stream, mac_address, ip).map_err(|e| {
                     QueryError::Communication {
                         server: server.to_owned(),
                         source: e,
@@ -350,8 +350,8 @@ fn renew(
     let mut addrs = get_addresses(server, default_port)?;
 
     while let Some(addr) = addrs.next() {
-        let stream = connect_timeout(&addr, timeout, server)?;
-        match client::get_ack(&stream, mac_address, ip_address) {
+        let mut stream = connect_timeout(&addr, timeout, server)?;
+        match client::get_ack(&mut stream, mac_address, ip_address) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
                 None => {

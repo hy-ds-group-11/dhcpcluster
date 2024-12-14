@@ -30,11 +30,11 @@ pub enum CommunicationError {
 }
 
 pub fn get_offer(
-    stream: &TcpStream,
+    stream: &mut TcpStream,
     mac_address: MacAddr,
 ) -> Result<Option<DhcpOffer>, CommunicationError> {
-    DhcpClientMessage::Discover { mac_address }.send(stream)?;
-    let response = DhcpServerMessage::recv(stream)?;
+    stream.send(&DhcpClientMessage::Discover { mac_address })?;
+    let response = stream.recv()?;
     match response {
         DhcpServerMessage::Offer(offer) => Ok(Some(offer)),
         msg @ DhcpServerMessage::Ack => Err(CommunicationError::UnexpectedMessage(msg)),
@@ -43,12 +43,12 @@ pub fn get_offer(
 }
 
 pub fn get_ack(
-    stream: &TcpStream,
+    stream: &mut TcpStream,
     mac_address: MacAddr,
     ip: Ipv4Addr,
 ) -> Result<bool, CommunicationError> {
-    DhcpClientMessage::Request { mac_address, ip }.send(stream)?;
-    let response = DhcpServerMessage::recv(stream)?;
+    stream.send(&DhcpClientMessage::Request { mac_address, ip })?;
+    let response = stream.recv()?;
     match response {
         msg @ DhcpServerMessage::Offer(_) => Err(CommunicationError::UnexpectedMessage(msg)),
         DhcpServerMessage::Ack => Ok(true),

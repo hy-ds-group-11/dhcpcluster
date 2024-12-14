@@ -1,6 +1,5 @@
 //! # User interface for a unix terminal
 //! Renders server's internal state and latest messages in a consistent way
-//! Intended to be used via the global static [`CONSOLE`] and the macros defined in this crate.
 
 use std::{
     collections::VecDeque,

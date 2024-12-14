@@ -23,10 +23,10 @@ jobs:
             target: aarch64-unknown-linux-musl
 
           - os-name: Windows-x86_64
-            runs-on: windows-latest
-            target: x86_64-pc-windows-msvc
+            runs-on: ubuntu-latest
+            target: x86_64-pc-windows-gnu
 
-          - os-name: macOS-aarch64
+          - os-name: MacOS-aarch64
             runs-on: macOS-latest
             target: aarch64-apple-darwin
 
@@ -41,14 +41,29 @@ jobs:
           target: ${{ matrix.platform.target }}
           args: "--locked --release"
           strip: true
-      - name: Rename client
-        run: mv target/${{ matrix.platform.target }}/release/client client-${{ matrix.platform.target }}
+      - name: Package (Windows)
+        if: startsWith(matrix.platform.os-name, 'Windows')
+        run: |
+          mv target/${{ matrix.platform.target }}/release/client.exe .
+          mv target/${{ matrix.platform.target }}/release/server-node.exe server.exe
+          zip dhcpcluster-${{ matrix.platform.target }}.zip client.exe server.exe server-node/config-template.toml client/config-template.toml
+      - name: Package (MacOS)
+        if: startsWith(matrix.platform.os-name, 'MacOS')
+        run: |
+          mv target/${{ matrix.platform.target }}/release/client .
+          mv target/${{ matrix.platform.target }}/release/server-node server
+          zip dhcpcluster-${{ matrix.platform.target }}.zip client server server-node/config-template.toml client/config-template.toml
+      - name: Package (Linux)
+        if: startsWith(matrix.platform.os-name, 'Linux')
+        run: |
+          mv target/${{ matrix.platform.target }}/release/client .
+          mv target/${{ matrix.platform.target }}/release/server-node server
+          tar -I zstd -cvf dhcpcluster-${{ matrix.platform.target }}.tar.zst client server server-node/config-template.toml client/config-template.toml
       - name: Rename server-node
-        run: mv target/${{ matrix.platform.target }}/release/server-node server-${{ matrix.platform.target }}
+        run:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            client-${{ matrix.platform.target }}
-            server-${{ matrix.platform.target }}
-            server-node/config-template.toml
+            dhcpcluster-*.zip
+            dhcpcluster-*.tar.zst

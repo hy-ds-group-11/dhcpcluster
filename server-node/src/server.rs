@@ -124,7 +124,7 @@ impl Server {
             let server_tx = server.tx.clone();
             thread::Builder::new()
                 .name(format!("{}::peer_listener_thread", module_path!()))
-                .spawn(move || Server::listen_nodes(&peer_listener, &server_tx))
+                .spawn(move || Server::listen_peers(&peer_listener, &server_tx))
                 .map_err(Error::Spawn)?
         };
 
@@ -475,10 +475,10 @@ impl Server {
         };
     }
 
-    fn listen_nodes(listener: &TcpListener, server_tx: &Sender<MainThreadMessage>) {
+    fn listen_peers(listener: &TcpListener, server_tx: &Sender<MainThreadMessage>) {
+        // TODO: Here we may need a mechanism to end this loop
         for stream in listener.incoming() {
             match stream {
-                // TODO: Here we may need a mechanism to end this thread, unless we just decide to detach it?
                 Ok(stream) => server_tx
                     .send(MainThreadMessage::IncomingPeerConnection(stream))
                     .expect("Invariant violated: server_rx has been dropped before joining peer listener thread"),
@@ -515,7 +515,7 @@ impl Server {
         let message = match stream.recv() {
             Ok(message) => message,
             Err(e) => {
-                console::error!(&e, "Could not receive client handshake message");
+                console::error!(&e, "Could not receive peer handshake message");
                 return;
             }
         };

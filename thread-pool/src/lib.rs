@@ -230,7 +230,7 @@ impl Worker {
     }
 
     fn has_quit(&self) -> bool {
-        self.thread.as_ref().map_or(true, JoinHandle::is_finished)
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
     }
 }
 

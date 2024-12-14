@@ -9,17 +9,26 @@ https://github.com/user-attachments/assets/7330d8de-9707-465b-840f-c8a18cb829f2
 Fall 2024, Group 11
 
 This repository contains a distributed DHCP server with shared state and a CLI for testing the server.
-A DHCP Relay Agent, acting as a load balancer, has been designed but not implemented.
+A DHCP Relay Agent, acting as a load balancer, has been designed but **not implemented**.
 
-The software is currently _prototype quality_, it's not intended for production use.
+The software is currently **prototype quality**, it's not intended for production use.
+
+### Features:
+- Written in Rust, blazingly fast :fire:
+- Multithreaded :rocket:
+- Shared state (all nodes know all leases)
+- Fault tolerance via redundancy
+- Leader election with bully algorithm
+  - Leader decides which node gets to give offers from which part of the address pool
+- Custom protocol, **does not actually implement DHCP** ([yet](https://github.com/hy-ds-group-11/dhcpcluster/issues/4))
+- Probably not completely reliable, but it's just DHCP
+- No `async` (for no particular reason)
 
 ## Documentation
 
 [Design document :paperclip:](doc/design.md)
 
 [Server documentation :books:](https://hy-ds-group-11.github.io/dhcpcluster/server_node/index.html)
-
-[Client-server protocol documentation :books:](https://hy-ds-group-11.github.io/dhcpcluster/protocol/index.html)
 
 ### Weekly notes :notebook_with_decorative_cover:
 
@@ -32,6 +41,6 @@ The software is currently _prototype quality_, it's not intended for production 
 | [49](doc/week49.md) | :1234::computer: Leader election, address pool distribution, client CLI           |
 | [50](doc/week50.md) | :sparkles: DHCP functionality and client-server communication                     |
 
-## Downloads
+## Downloads :floppy_disk:
 
-[See: Releases](https://github.com/hy-ds-group-11/dhcpcluster/releases)
+[See Releases](https://github.com/hy-ds-group-11/dhcpcluster/releases)

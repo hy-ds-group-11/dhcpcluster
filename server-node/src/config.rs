@@ -88,11 +88,13 @@ impl From<File> for Config {
             lease_time: Duration::from_secs(lease_time),
             dhcp_address,
             // Use thread count in config file if defined as > 0,
-            // otherwise use thread::available_parallelism(),
+            // otherwise use 4x thread::available_parallelism(),
             // and if all else fails, use a default of 8
             thread_count: thread_count.and_then(NonZero::new).unwrap_or_else(|| {
-                #[allow(clippy::unwrap_used, reason = "Default thread count from literal")]
-                thread::available_parallelism().unwrap_or(NonZero::new(8).unwrap())
+                #[allow(clippy::unwrap_used, reason = "NonZero constructed from literal")]
+                thread::available_parallelism()
+                    .map(|n| NonZero::new(usize::from(n) * 4).unwrap())
+                    .unwrap_or(NonZero::new(8).unwrap())
             }),
         }
     }

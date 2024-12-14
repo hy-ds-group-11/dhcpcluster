@@ -14,7 +14,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     io::{self, ErrorKind},
-    net::{Ipv4Addr, TcpListener, TcpStream, ToSocketAddrs},
+    net::{Ipv4Addr, TcpListener, TcpStream},
     sync::{
         mpsc::{self, Sender},
         Arc,
@@ -204,75 +204,32 @@ impl Server {
         Ok(())
     }
 
-    fn connect_peer(
-        config: &Arc<Config>,
-        server_tx: &Sender<MainThreadMessage>,
-        peer_index: usize,
-    ) {
-        let (peer_id, name) = &config.peers[peer_index];
-        let timeout = config.peer_connection_timeout;
-        console::debug!("Connecting to {peer_id} at {name}");
-        match name.to_socket_addrs() {
-            Ok(addrs) => {
-                for addr in addrs {
-                    let result = if let Some(timeout) = timeout {
-                        TcpStream::connect_timeout(&addr, timeout)
-                    } else {
-                        TcpStream::connect(addr)
-                    };
-
-                    match result {
-                        Ok(stream) => {
-                            match Peer::start_handshake(
-                                stream,
-                                &Arc::clone(config),
-                                server_tx.clone(),
-                            ) {
-                                Ok(success) => server_tx
-                                    .send(MainThreadMessage::EstablishedPeerConnection(
-                                        success,
-                                    ))
-                                    .expect("Invariant violated: server_rx has been dropped before connect_peers has finished"),
-                                Err(
-                                    e @ (HandshakeError::Recv(_) | HandshakeError::SendJoin(_)),
-                                ) => {
-                                    // Expected errors, just use debug log
-                                    console::debug!("Handshake failed: {e}");
-                                }
-                                Err(e) => {
-                                    console::error!(
-                                        &e,
-                                        "Unexpected hanshake error with {peer_id} at {name}"
-                                    );
-                                }
-                            };
-                        }
-                        Err(e) => {
-                            console::error!(&e, "Can't connect to peer {peer_id} at {name}");
-                        }
-                    }
-                }
-            }
-            Err(e) => console::error!(&e, "Name resolution failed for {peer_id} at {name}"),
-        }
-    }
-
     fn attempt_connect(&mut self) {
         self.last_connect_attempt = ConnectAttempt::Running;
         console::debug!("Connection attempt started");
 
-        // Using enumerate is a dirty hack which simplifies how much we need to pass to the thread
-        // It already has access to an unchanging Config, so this avoids adding lifetimes etc.
-        // TODO: Implement a better, more Rust-like solution
-        for (index, (peer_id, _)) in self.config.peers.iter().enumerate() {
+        for (peer_id, name) in &self.config.peers {
             // Only start connections with peers we don't have a connection with
             // Always have the higher ID start connections to avoid race conditions with concurrent
             // handshakes
             if !self.peers.contains_key(peer_id) && self.config.id > *peer_id {
-                let server_tx = self.tx.clone();
                 let config = Arc::clone(&self.config);
+                let peer_id = *peer_id;
+                let name = name.to_owned();
+                let server_tx = self.tx.clone();
                 self.thread_pool
-                    .execute(move || Self::connect_peer(&config, &server_tx, index))
+                    .execute(
+                        move || match Peer::connect(&config, peer_id, &name, &server_tx) {
+                            Ok(success) => {
+                                server_tx
+                                    .send(MainThreadMessage::EstablishedPeerConnection(success))
+                                    .expect("Invariant violated: server_rx has been dropped");
+                            }
+                            Err(e) => {
+                                console::error!(&e, "Can't connect to peer {peer_id} at {name}");
+                            }
+                        },
+                    )
                     .expect("Thread pool cannot spawn treads");
             }
         }

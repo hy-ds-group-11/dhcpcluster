@@ -4,7 +4,8 @@ use crate::{
 use protocol::{RecvCbor, SendCbor};
 use std::{
     fmt::Display,
-    net::TcpStream,
+    io,
+    net::{TcpStream, ToSocketAddrs},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
@@ -25,6 +26,20 @@ pub enum HandshakeError {
     NoJoinAck(Message),
     #[error("Peer initiated with {0:?} when expecting Join")]
     NoJoin(Message),
+    #[error("Can't establish stream to peer {peer_id}")]
+    Connect { peer_id: Id, source: io::Error },
+    #[error("Can't resolve peer {peer_id} address ({name})")]
+    NameResolution {
+        peer_id: Id,
+        name: String,
+        source: io::Error,
+    },
+    #[error("Peer {peer_id} name {name} resolved to 0 addresses, can't reach peer")]
+    Unreachable { peer_id: Id, name: String },
+    #[error(
+        "JoinAck mismatch! Expected id {expected}, received {received}.\nFix your configuration."
+    )]
+    IdMismatch { expected: Id, received: Id },
 }
 
 #[derive(Debug)]
@@ -47,6 +62,49 @@ pub struct Peer {
 }
 
 impl Peer {
+    /// Initiate peer connection
+    pub fn connect(
+        config: &Arc<Config>,
+        peer_id: Id,
+        name: &str,
+        server_tx: &Sender<MainThreadMessage>,
+    ) -> Result<JoinSuccess, HandshakeError> {
+        let timeout = config.peer_connection_timeout;
+        console::debug!("Connecting to {peer_id} at {name}");
+
+        // Resolve address
+        let mut addrs = name
+            .to_socket_addrs()
+            .map_err(|e| HandshakeError::NameResolution {
+                peer_id,
+                name: name.to_owned(),
+                source: e,
+            })?
+            .peekable();
+
+        // Try every result
+        while let Some(addr) = addrs.next() {
+            let stream = match if let Some(timeout) = timeout {
+                TcpStream::connect_timeout(&addr, timeout)
+            } else {
+                TcpStream::connect(addr)
+            } {
+                Ok(stream) => stream,
+                Err(e) => match addrs.peek() {
+                    Some(_) => continue, // Retry next result if available
+                    None => return Err(HandshakeError::Connect { peer_id, source: e }),
+                },
+            };
+
+            return Self::start_handshake(stream, &Arc::clone(config), peer_id, server_tx.clone());
+        }
+        Err(HandshakeError::Unreachable {
+            peer_id,
+            name: name.to_owned(),
+        })
+    }
+
+    /// Start peer IO threads
     #[must_use]
     pub fn new(
         mut stream: TcpStream,
@@ -89,6 +147,7 @@ impl Peer {
     pub fn start_handshake(
         mut stream: TcpStream,
         config: &Arc<Config>,
+        expected_id: Id,
         server_tx: Sender<MainThreadMessage>,
     ) -> Result<JoinSuccess, HandshakeError> {
         stream
@@ -96,14 +155,22 @@ impl Peer {
             .expect("Can't set stream read timeout");
 
         stream.send(&Message::Join(config.id))?;
+
         match stream.recv()? {
             Message::JoinAck { peer_id, leases } => {
-                console::log!("Connected to peer {peer_id}");
-                Ok(JoinSuccess {
-                    peer_id,
-                    peer: Self::new(stream, peer_id, server_tx, config.heartbeat_timeout),
-                    leases,
-                })
+                if peer_id == expected_id {
+                    console::log!("Connected to peer {peer_id}");
+                    Ok(JoinSuccess {
+                        peer_id,
+                        peer: Self::new(stream, peer_id, server_tx, config.heartbeat_timeout),
+                        leases,
+                    })
+                } else {
+                    Err(HandshakeError::IdMismatch {
+                        expected: expected_id,
+                        received: peer_id,
+                    })
+                }
             }
             message => Err(HandshakeError::NoJoinAck(message)),
         }

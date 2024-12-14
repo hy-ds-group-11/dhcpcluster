@@ -63,5 +63,5 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            dhcpcluster-*.zip
-            dhcpcluster-*.tar.zst
+            target/dhcpcluster-*.zip
+            target/dhcpcluster-*.tar.zst

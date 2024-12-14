@@ -43,18 +43,21 @@ jobs:
           strip: true
       - name: Package
         run: |
+          cp client/config-template.toml target/client-config-template.toml
+          cp server-node/config-template.toml target/server-config-template.toml
+          cd target
           if [[ ${{ matrix.platform.os-name }} == Linux* ]]; then
-            mv target/${{ matrix.platform.target }}/release/client .
-            mv target/${{ matrix.platform.target }}/release/server-node server
-            tar -I zstd -cvf dhcpcluster-${{ matrix.platform.target }}.tar.zst client server server-node/config-template.toml client/config-template.toml
+            mv ${{ matrix.platform.target }}/release/client client
+            mv ${{ matrix.platform.target }}/release/server-node server
+            tar -I zstd -cvf dhcpcluster-${{ matrix.platform.target }}.tar.zst client server client-config-template.toml server-config-template.toml
           elif [[ ${{ matrix.platform.os-name }} == Windows* ]]; then
-            mv target/${{ matrix.platform.target }}/release/client.exe .
-            mv target/${{ matrix.platform.target }}/release/server-node.exe server.exe
-            zip dhcpcluster-${{ matrix.platform.target }}.zip client.exe server.exe server-node/config-template.toml client/config-template.toml
+            mv ${{ matrix.platform.target }}/release/client.exe client.exe
+            mv ${{ matrix.platform.target }}/release/server-node.exe server.exe
+            zip dhcpcluster-${{ matrix.platform.target }}.zip client.exe server.exe client-config-template.toml server-config-template.toml
           elif [[ ${{ matrix.platform.os-name }} == MacOS* ]]; then
-            mv target/${{ matrix.platform.target }}/release/client .
-            mv target/${{ matrix.platform.target }}/release/server-node server
-            zip dhcpcluster-${{ matrix.platform.target }}.zip client server server-node/config-template.toml client/config-template.toml
+            mv ${{ matrix.platform.target }}/release/client client
+            mv ${{ matrix.platform.target }}/release/server-node server
+            zip dhcpcluster-${{ matrix.platform.target }}.zip client server client-config-template.toml server-config-template.toml
           fi
       - name: Publish release
         uses: softprops/action-gh-release@v2

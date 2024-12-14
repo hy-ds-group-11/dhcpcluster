@@ -34,7 +34,7 @@ pub enum Error {
 }
 
 pub trait TomlConfig<F: DeserializeOwned>: Sized + From<F> {
-    /// Loads a .toml file from the filesystem, parses it, and initializes a [`Self`].
+    /// Load config from a .toml file in the filesystem
     fn load_toml_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let path = path.as_ref();
         if path.extension() != Some(OsStr::new("toml")) {

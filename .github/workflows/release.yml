@@ -33,14 +33,15 @@ jobs:
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v0
         with:
-          command: ${{ matrix.platform.command }}
+          command: build
           target: ${{ matrix.platform.target }}
           args: "--locked --release"
           strip: true
       - name: Publish server-node
         uses: houseabsolute/actions-rust-release@v0
         with:
-          executable-name: server-node client
+          executable-name: server-node
+          extra-files: server-node/config-template.toml
           target: ${{ matrix.platform.target }}
       - name: Publish client
         uses: houseabsolute/actions-rust-release@v0

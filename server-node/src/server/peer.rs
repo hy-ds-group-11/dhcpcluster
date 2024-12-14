@@ -83,7 +83,7 @@ impl Peer {
         name: &str,
         server_tx: &Sender<Event>,
     ) -> Result<JoinSuccess, HandshakeError> {
-        let timeout = config.peer_connection_timeout;
+        let timeout = config.connect_timeout;
         console::debug!("Connecting to {peer_id} at {name}");
 
         // Resolve address

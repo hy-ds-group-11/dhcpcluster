@@ -51,14 +51,14 @@ fn main() {
     };
 
     // Start listening
-    let peer_listener = match TcpListener::bind(config.address_private) {
+    let peer_listener = match TcpListener::bind(config.listen_cluster) {
         Ok(listener) => listener,
         Err(e) => {
             print_error(&e);
             exit(2);
         }
     };
-    let client_listener = match TcpListener::bind(config.dhcp_address) {
+    let client_listener = match TcpListener::bind(config.listen_dhcp) {
         Ok(listener) => listener,
         Err(e) => {
             print_error(&e);

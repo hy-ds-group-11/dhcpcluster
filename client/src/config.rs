@@ -6,7 +6,7 @@ use toml_config::TomlConfig;
 pub struct File {
     servers: Vec<String>,
     default_port: u16,
-    timeout: Option<u64>,
+    timeout_seconds: Option<u64>,
     thread_count: Option<usize>,
 }
 
@@ -23,14 +23,14 @@ impl From<File> for Config {
         File {
             servers,
             default_port,
-            timeout,
+            timeout_seconds,
             thread_count,
         }: File,
     ) -> Self {
         Self {
             servers,
             default_port,
-            timeout: timeout.map(Duration::from_secs),
+            timeout: timeout_seconds.map(Duration::from_secs),
             // Use thread count in config file if defined as > 0,
             // otherwise use thread::available_parallelism(),
             // and if all else fails, use a default of 8

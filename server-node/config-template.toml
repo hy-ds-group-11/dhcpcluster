@@ -1,8 +1,26 @@
-address_private = "0.0.0.0:1234"
-id = 0
-peers = []
-heartbeat_timeout = 2000
+[dhcp]
 net = "10.0.0.0"
 prefix_length = 24
-lease_time = 3600
-dhcp_address = "127.0.1.1:4321"
+lease_time_seconds = 3600
+
+[server]
+listen_cluster = "[::]:1234"
+listen_dhcp = "127.0.1.1:4321"
+# Optional, default: 10s
+client_timeout_seconds = 10
+# Optional, default: 4x logical cores available
+thread_count = 128
+
+[cluster]
+id = 0
+heartbeat_timeout_millis = 2000
+# Optional, default: 10s
+connect_timeout_seconds = 10
+
+[[peers]]
+id = 1
+host = "dhcp1.example.com:1234"
+
+[[peers]]
+id = 2
+host = "dhcp2.example.com:1234"

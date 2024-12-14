@@ -1,8 +1,20 @@
-address_private = "0.0.0.0:1234"
-id = 0
-peers = [[1, "0.0.0.0:1235"], [2, "0.0.0.0:1236"]]
-heartbeat_timeout = 2000
+[dhcp]
 net = "10.0.0.0"
 prefix_length = 8
-lease_time = 3600
-dhcp_address = "127.0.1.1:4321"
+lease_time_seconds = 3600
+
+[server]
+listen_cluster = "[::]:1234"
+listen_dhcp = "127.0.1.1:4321"
+
+[cluster]
+id = 0
+heartbeat_timeout_millis = 2000
+
+[[peers]]
+id = 1
+host = "localhost:1235"
+
+[[peers]]
+id = 2
+host = "localhost:1236"

@@ -2,7 +2,7 @@ pub mod client;
 pub mod peer;
 
 use crate::{
-    config::Config,
+    config::{self, Config},
     console,
     dhcp::{self, Ipv4Range, Lease, LeaseOffer},
     ThreadJoin,
@@ -203,14 +203,14 @@ impl Server {
         self.last_connect_attempt = ConnectAttempt::Running;
         console::debug!("Connection attempt started");
 
-        for (peer_id, name) in &self.config.peers {
+        for config::Peer { id, host } in &self.config.peers {
             // Only start connections with peers we don't have a connection with
             // Always have the higher ID start connections to avoid race conditions with concurrent
             // handshakes
-            if !self.peers.contains_key(peer_id) && self.config.id > *peer_id {
+            if !self.peers.contains_key(id) && self.config.id > *id {
                 let config = Arc::clone(&self.config);
-                let peer_id = *peer_id;
-                let name = name.to_owned();
+                let peer_id = *id;
+                let name = host.to_owned();
                 let server_tx = self.tx.clone();
                 self.thread_pool
                     .execute(
@@ -512,7 +512,7 @@ impl Display for Server {
 
         let title = format!(
             "Server {} listening to peers on {}",
-            self.config.id, self.config.address_private
+            self.config.id, self.config.listen_cluster
         );
         let mut hline = title.chars().map(|_| '-').collect::<String>();
         hline = format!("\x1B[90m{hline}\x1B[0m");
@@ -553,7 +553,7 @@ impl Display for Server {
         // Majority and dhcp address
         write_label(f, "Service")?;
         if self.majority {
-            writeln!(f, "{}", self.config.dhcp_address)?;
+            writeln!(f, "{}", self.config.listen_dhcp)?;
         } else {
             writeln!(f, "No majority")?;
         }

@@ -15,87 +15,103 @@ use std::{
 };
 use toml_config::TomlConfig;
 
-// TODO: Make the field names consistent (e.g. address- prefix/postfix)
 #[derive(Deserialize, Debug)]
-pub struct File {
-    address_private: SocketAddr,
-    peers: Vec<(peer::Id, String)>,
-    id: peer::Id,
-    heartbeat_timeout: u64,
-    peer_connection_timeout: Option<u64>,
-    client_timeout: Option<u64>,
+pub struct DhcpSection {
     net: Ipv4Addr,
     prefix_length: u32,
-    lease_time: u64,
-    dhcp_address: SocketAddr,
+    lease_time_seconds: u64,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ServerSection {
+    listen_cluster: SocketAddr,
+    listen_dhcp: SocketAddr,
+    client_timeout_seconds: Option<u64>,
     thread_count: Option<usize>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct ClusterSection {
+    id: peer::Id,
+    heartbeat_timeout_millis: u64,
+    connect_timeout_seconds: Option<u64>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct Peer {
+    pub id: peer::Id,
+    pub host: String,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct File {
+    dhcp: DhcpSection,
+    server: ServerSection,
+    cluster: ClusterSection,
+    peers: Vec<Peer>,
 }
 
 /// Server configuration
 ///
 /// Use [`Config::load_toml_file`] to initialize.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Config {
-    pub address_private: SocketAddr,
-    pub peers: Vec<(peer::Id, String)>,
+    pub dhcp_pool: Ipv4Range,
+    pub prefix_length: u32,
+    pub lease_time: Duration,
+
+    pub listen_cluster: SocketAddr,
+    pub listen_dhcp: SocketAddr,
+    pub client_timeout: Duration,
+    pub thread_count: NonZero<usize>,
+
     pub id: peer::Id,
     pub heartbeat_timeout: Duration,
-    pub peer_connection_timeout: Option<Duration>,
-    pub client_timeout: Duration,
-    pub prefix_length: u32,
-    pub dhcp_pool: Ipv4Range,
-    pub lease_time: Duration,
-    pub dhcp_address: SocketAddr,
-    pub thread_count: NonZero<usize>,
+    pub connect_timeout: Option<Duration>,
+    pub peers: Vec<Peer>,
 }
 
 impl From<File> for Config {
     // This implementation is a no-op for now, but down the line it's possible
     // that our server configuration struct diverges from the
     // configuration file contents
-    fn from(
-        File {
-            address_private,
-            peers,
-            id,
-            heartbeat_timeout,
-            peer_connection_timeout,
-            client_timeout,
-            net,
-            prefix_length,
-            lease_time,
-            dhcp_address,
-            thread_count,
-        }: File,
-    ) -> Self {
+    fn from(file: File) -> Self {
+        let dhcp = file.dhcp;
+        let server = file.server;
+        let cluster = file.cluster;
+
         Self {
-            address_private,
-            peers,
-            id,
-            heartbeat_timeout: Duration::from_millis(heartbeat_timeout),
-            // If None in File, default to 10 seconds
-            // If defined as Some(0), set None to Config
-            peer_connection_timeout: peer_connection_timeout
+            // DHCP
+            dhcp_pool: Ipv4Range::from_cidr(dhcp.net, dhcp.prefix_length),
+            prefix_length: dhcp.prefix_length,
+            lease_time: Duration::from_secs(dhcp.lease_time_seconds),
+
+            // Server
+            listen_cluster: server.listen_cluster,
+            listen_dhcp: server.listen_dhcp,
+            client_timeout: server
+                .client_timeout_seconds
+                .and_then(|sec| (sec != 0).then_some(Duration::from_secs(sec)))
+                .unwrap_or(Duration::from_secs(10)),
+            thread_count: server
+                .thread_count
+                .and_then(NonZero::new)
+                .unwrap_or_else(|| {
+                    #[allow(clippy::unwrap_used, reason = "NonZero constructed from literal")]
+                    thread::available_parallelism()
+                        .map(|n| NonZero::new(usize::from(n) * 4).unwrap())
+                        .unwrap_or(NonZero::new(8).unwrap())
+                }),
+
+            // Cluster
+            id: cluster.id,
+            heartbeat_timeout: Duration::from_millis(cluster.heartbeat_timeout_millis),
+            connect_timeout: cluster
+                .connect_timeout_seconds
                 .map_or(Some(Duration::from_secs(10)), |sec| {
                     (sec != 0).then_some(Duration::from_secs(sec))
                 }),
-            // If None in File, default to 10 seconds
-            client_timeout: client_timeout
-                .and_then(|sec| (sec != 0).then_some(Duration::from_secs(sec)))
-                .unwrap_or(Duration::from_secs(10)),
-            prefix_length,
-            dhcp_pool: Ipv4Range::from_cidr(net, prefix_length),
-            lease_time: Duration::from_secs(lease_time),
-            dhcp_address,
-            // Use thread count in config file if defined as > 0,
-            // otherwise use 4x thread::available_parallelism(),
-            // and if all else fails, use a default of 8
-            thread_count: thread_count.and_then(NonZero::new).unwrap_or_else(|| {
-                #[allow(clippy::unwrap_used, reason = "NonZero constructed from literal")]
-                thread::available_parallelism()
-                    .map(|n| NonZero::new(usize::from(n) * 4).unwrap())
-                    .unwrap_or(NonZero::new(8).unwrap())
-            }),
+            peers: file.peers,
         }
     }
 }

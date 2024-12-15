@@ -137,10 +137,14 @@ impl Server {
 
     fn run_event_loop(&mut self, server_rx: &Receiver<Event>) {
         let mut last_connect_attempt = SystemTime::UNIX_EPOCH;
+        let mut last_state_update = SystemTime::UNIX_EPOCH;
 
         loop {
             // Render pretty text representation if running in a terminal
-            console::update_state(format!("{self}"));
+            if last_state_update.elapsed().unwrap_or(Duration::ZERO) > Duration::from_millis(100) {
+                last_state_update = SystemTime::now();
+                console::update_state(format!("{self}"));
+            }
 
             // Periodically check if server needs to connect to peers
             if last_connect_attempt.elapsed().unwrap_or(Duration::ZERO)

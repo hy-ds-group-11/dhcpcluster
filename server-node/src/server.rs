@@ -74,7 +74,7 @@ impl Server {
         let dhcp_service = dhcp::Service::new(config.dhcp_pool.clone(), config.lease_time);
         let thread_count = config.thread_count;
         console::log!(
-            "Server version {} starting with {} workers",
+            "Server version {} starting {} workers",
             env!("CARGO_PKG_VERSION"),
             thread_count
         );

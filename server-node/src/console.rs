@@ -55,7 +55,6 @@ impl Console {
                 .unwrap();
                 *lines = lines.saturating_sub(2); // Probably takes two lines due to small width
             }
-            *lines = lines.saturating_sub(1);
         }
 
         // Print log (up to the remaining terminal lines, no more)

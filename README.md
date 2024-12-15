@@ -2,9 +2,7 @@
 
 A University of Helsinki **Distributed Systems** Course Project
 
-
-https://github.com/user-attachments/assets/7330d8de-9707-465b-840f-c8a18cb829f2
-
+![Demo video](doc/demo.mp4)
 
 Fall 2024, Group 11
 

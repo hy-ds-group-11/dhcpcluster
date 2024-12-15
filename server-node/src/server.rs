@@ -150,14 +150,14 @@ impl Server {
                 self.attempt_connect();
             }
 
-            // Receive the next message from other threads (peer I/O, listeners, timers etc.)
-            let message = match server_rx.recv_timeout(self.config.connect_timeout) {
-                Ok(message) => message,
+            // Receive the next event from other threads (peer I/O, listeners, timers etc.)
+            let event = match server_rx.recv_timeout(self.config.connect_timeout) {
+                Ok(event) => event,
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => break,
             };
 
-            match message {
+            match event {
                 Event::IncomingPeerConnection(tcp_stream) => {
                     self.answer_handshake(tcp_stream);
                 }
@@ -334,7 +334,7 @@ impl Server {
     /// Send [`Message::Election`] to all server peers with higher ids than this server.
     ///
     /// This function starts a timer thread which sleeps until the bully algorithm timeout expires.
-    /// The timer triggers a [`ServerThreadMessage::ElectionTimeout`] to the the server thread.
+    /// The timer triggers a [`Event::ElectionTimeout`] to the the server thread.
     fn start_election(&mut self) {
         self.election_state = ElectionState::WaitingForElection;
 
@@ -362,7 +362,7 @@ impl Server {
     }
 
     /// Inspect current server role. Become leader and send [`Message::Coordinator`] to all peers
-    /// if no event has reset the server role back to [`ServerRole::Follower`].
+    /// if no event has reset the server role back to [`ElectionState::Follower`].
     fn finish_election(&mut self) {
         match self.election_state {
             ElectionState::WaitingForElection => {

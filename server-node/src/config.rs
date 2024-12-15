@@ -4,13 +4,13 @@
 //!
 //! This crate contains a distributed DHCP server implementation, with a custom protocol between nodes.
 //!
-//! For the protocol definition, look into the [`server::peer::message`] module.
+//! For the protocol definition, look into the [`peer::message`] module.
 //!
 //! The server architecture comprises of threads, which use blocking operations to communicate over [`std::net::TcpStream`]s.
 //! There are two threads per active peer, one for receiving messages and one for sending messages.
 //! There is also a server logic thread, handling bookkeeping for the peer- and client events.
 //!
-//! For the communication thread implementation, look into the [`server::peer`] module.
+//! For the communication thread implementation, look into the [`peer`] module.
 //!
 //! This module contains the server configuration structure, along with facilities for
 //! loading configuration files from the filesystem.

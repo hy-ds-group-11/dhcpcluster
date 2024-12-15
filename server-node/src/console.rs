@@ -4,7 +4,7 @@
 use std::{
     collections::VecDeque,
     error::Error,
-    io::{self, IsTerminal, Write},
+    io::{self, BufWriter, IsTerminal, Write},
     sync::{
         mpsc::{self, Sender},
         LazyLock,
@@ -32,27 +32,21 @@ impl Console {
         }
     }
 
-    fn render(&self, start_time: SystemTime, state: &str) -> io::Result<()> {
-        let mut stdout = io::stdout().lock();
-
+    fn render(&self, to: &mut impl Write, start_time: SystemTime, state: &str) -> io::Result<()> {
         // Get terminal height
         let mut lines: Option<usize> = terminal_size().map(|(_, Height(h))| h.into());
 
         // Clear terminal and move cursor to top left
-        stdout.write_all(b"\x1B[2J\x1B[H")?;
+        to.write_all(b"\x1B[2J\x1B[H")?;
 
         if let Some(lines) = &mut lines {
             // Subtract from remaining terminal lines available
             let remaining = lines.saturating_sub(state.lines().count());
             if remaining > 0 {
-                stdout.write_all(state.as_bytes())?;
+                to.write_all(state.as_bytes())?;
                 *lines = remaining;
             } else {
-                writeln!(
-                    stdout,
-                    "Terminal height is too low! Can't show server state."
-                )
-                .unwrap();
+                writeln!(to, "Terminal height is too low! Can't show server state.").unwrap();
                 *lines = lines.saturating_sub(2); // Probably takes two lines due to small width
             }
         }
@@ -62,15 +56,14 @@ impl Console {
         let mut iter = self.event_log.iter().take(lines).rev().peekable();
         while let Some((time, desc)) = iter.next() {
             if let Ok(duration) = time.duration_since(start_time) {
-                write!(stdout, "\x1B[90m{duration:<9.3?}:\x1B[0m ").unwrap();
+                write!(to, "\x1B[90m{duration:<9.3?}:\x1B[0m ").unwrap();
             }
-            stdout.write_all(desc.as_bytes())?;
+            to.write_all(desc.as_bytes())?;
             if iter.peek().is_some() {
-                stdout.write_all(b"\n")?;
+                to.write_all(b"\n")?;
             }
         }
 
-        stdout.flush()?;
         Ok(())
     }
 }
@@ -86,6 +79,7 @@ static CONSOLE: LazyLock<Sender<ConsoleUpdate>> = LazyLock::new(|| {
     if let Err(e) = thread::Builder::new()
         .name(format!("{}::console_ui_thread", module_path!()))
         .spawn(move || {
+            let mut stdout = BufWriter::new(io::stdout().lock());
             let mut console = Console::new(1024);
             let mut state = String::new();
             while let Ok(update) = rx.recv() {
@@ -93,9 +87,10 @@ static CONSOLE: LazyLock<Sender<ConsoleUpdate>> = LazyLock::new(|| {
                     ConsoleUpdate::State(s) => state = s,
                     ConsoleUpdate::Log(description) => console.push_event(description),
                 }
-                if let Err(e) = console.render(start_time, &state) {
-                    panic!("Can't render UI to console!\n{e}");
-                }
+                console
+                    .render(&mut stdout, start_time, &state)
+                    .and_then(|()| stdout.flush())
+                    .unwrap_or_else(|e| panic!("Can't render UI to console!\n{e}"));
             }
         })
     {

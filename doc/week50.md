@@ -24,6 +24,8 @@ Remaining bugs and improvement ideas were documented in [Issues](https://github.
 
 ## 2024-12-15
 
+![1000 queries in less than a second](1000.png)
+
 The abovementioned issues list got shorter during the rest of the week.
 Major changes include:
 - Multithreaded test client (1000s of requests per second!)

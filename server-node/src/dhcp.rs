@@ -252,7 +252,7 @@ impl Display for Lease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "MAC {} has IP {}", self.hardware_address, self.address,)?;
         if let Ok(dur) = self.expiry_timestamp.duration_since(SystemTime::now()) {
-            write!(f, ", expiring in {dur:<9.0?}")?;
+            write!(f, " for {dur:<9.0?}")?;
         }
         Ok(())
     }

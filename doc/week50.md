@@ -21,3 +21,22 @@ course grading criteria as well.
 A demo video was recorded, which can be viewed in the [README](../README.md).
 
 Remaining bugs and improvement ideas were documented in [Issues](https://github.com/hy-ds-group-11/dhcpcluster/issues).
+
+## 2024-12-15
+
+The abovementioned issues list got shorter during the rest of the week.
+Major changes include:
+- Multithreaded test client (1000s of requests per second!)
+- Free lease search optimization (still using linear search)
+- Lots and lots of error handling, prettier logging and less panics
+  - UI code was detached from the main thread using a channel
+- Code refactoring and cleanup, very strict linter settings enabled
+- Configuration file format was refactored
+  - Units are now suffixed to field names where applicable
+  - Structure was added
+- Added a GitHub action that builds releases for all major platforms!
+
+The prototype version (without real DHCP) is nearly completed now, the recent
+releases could be described as "alpha releases". We're proud of our work.
+Using Rust and working in an agile team with pair- and mob programming was a great experience,
+these tools and practices were a good fit for a project like this.

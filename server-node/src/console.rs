@@ -60,14 +60,18 @@ impl Console {
 
         // Print log (up to the remaining terminal lines, no more)
         let lines = lines.unwrap_or(usize::MAX);
-        for (time, desc) in self.event_log.iter().take(lines).rev() {
+        let mut iter = self.event_log.iter().take(lines).rev().peekable();
+        while let Some((time, desc)) = iter.next() {
             if let Ok(duration) = time.duration_since(start_time) {
                 write!(stdout, "\x1B[90m{duration:<9.3?}:\x1B[0m ").unwrap();
             }
             stdout.write_all(desc.as_bytes())?;
-            stdout.write_all(b"\n")?;
+            if iter.peek().is_some() {
+                stdout.write_all(b"\n")?;
+            }
         }
 
+        stdout.flush()?;
         Ok(())
     }
 }

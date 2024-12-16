@@ -158,6 +158,7 @@ impl Service {
 
     pub fn set_pool(&mut self, pool: Ipv4Range) {
         self.pool = pool;
+        self.next_candidate_address = self.pool.start();
     }
 
     pub fn add_lease(&mut self, new_lease: Lease) {

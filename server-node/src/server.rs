@@ -165,16 +165,8 @@ impl Server {
                 Event::IncomingPeerConnection(tcp_stream) => {
                     self.answer_handshake(tcp_stream);
                 }
-                Event::EstablishedPeerConnection(JoinSuccess {
-                    peer_id,
-                    peer,
-                    leases,
-                }) => {
+                Event::EstablishedPeerConnection(JoinSuccess { peer_id, peer }) => {
                     if let Ok(()) = self.add_peer(peer_id, peer) {
-                        if self.dhcp_service.leases.len() < leases.len() {
-                            console::debug!("Updating leases");
-                            self.dhcp_service.leases = leases;
-                        }
                         // Need to initiate election, cluster changed
                         self.start_election();
                     }
@@ -272,10 +264,7 @@ impl Server {
         };
 
         if let Message::Join(peer_id) = message {
-            match stream.send(&Message::JoinAck {
-                peer_id: self.config.id,
-                leases: self.dhcp_service.leases.clone(),
-            }) {
+            match stream.send(&Message::JoinAck(self.config.id)) {
                 Ok(()) => {
                     console::log!("Peer {peer_id} joined");
 
@@ -318,6 +307,10 @@ impl Server {
             console::debug!("peer.join() returned, stream should be closed now");
         }
         console::debug!("Added peer {peer_id}");
+
+        // Send our lease table to the new peer
+        self.peers[&peer_id].send_message(Message::LeaseTable(self.dhcp_service.leases.clone()));
+
         Ok(())
     }
 
@@ -444,6 +437,12 @@ impl Server {
             Message::Okay => self.handle_okay(sender_id),
             Message::Coordinator { majority } => self.handle_coordinator(sender_id, majority),
             Message::Lease(lease) => self.handle_add_lease(lease),
+            Message::LeaseTable(leases) => {
+                if self.dhcp_service.leases.len() < leases.len() {
+                    console::debug!("Updating leases");
+                    self.dhcp_service.leases = leases;
+                }
+            }
             Message::SetPool(update) => self.handle_set_pool(update),
             Message::Join(..) | Message::JoinAck { .. } => {
                 console::warning!("Server received unexpected {message:?} from peer {sender_id}");

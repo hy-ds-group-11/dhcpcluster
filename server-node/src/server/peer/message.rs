@@ -18,17 +18,13 @@ use std::net::TcpStream;
 #[derive(Serialize, Deserialize, Debug, PartialEq)]
 pub enum Message {
     Join(peer::Id),
-    JoinAck {
-        peer_id: peer::Id,
-        leases: Vec<Lease>,
-    },
+    JoinAck(peer::Id),
     Heartbeat,
     Election,
     Okay,
-    Coordinator {
-        majority: bool,
-    },
+    Coordinator { majority: bool },
     Lease(Lease),
+    LeaseTable(Vec<Lease>),
     SetPool(Ipv4Range),
 }
 

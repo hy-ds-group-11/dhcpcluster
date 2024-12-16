@@ -3,7 +3,6 @@ pub mod message;
 use crate::{
     config::{self, Config},
     console,
-    dhcp::Lease,
     server::Event,
     ThreadJoin,
 };
@@ -53,7 +52,6 @@ pub enum HandshakeError {
 pub struct JoinSuccess {
     pub peer_id: Id,
     pub peer: Peer,
-    pub leases: Vec<Lease>,
 }
 
 pub type Id = u32;
@@ -176,13 +174,12 @@ impl Peer {
         stream.send(&Message::Join(config.id))?;
 
         match stream.recv()? {
-            Message::JoinAck { peer_id, leases } => {
+            Message::JoinAck(peer_id) => {
                 if peer_id == expected_id {
                     console::log!("Connected to peer {peer_id}");
                     Ok(JoinSuccess {
                         peer_id,
                         peer: Self::new(stream, peer_id, server_tx, config.heartbeat_timeout),
-                        leases,
                     })
                 } else {
                     Err(HandshakeError::IdMismatch {

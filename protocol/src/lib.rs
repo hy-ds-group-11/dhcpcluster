@@ -85,7 +85,7 @@ pub enum DhcpClientMessage {
     Request { mac_address: MacAddr, ip: Ipv4Addr },
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct DhcpOffer {
     pub ip: Ipv4Addr,
     pub lease_time: u32,

@@ -16,6 +16,7 @@ use rand::Rng;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::{
     any::Any,
+    collections::HashMap,
     error::Error,
     fmt::Display,
     io,
@@ -271,9 +272,11 @@ fn connect_timeout(
     Ok(stream)
 }
 
+#[derive(Clone)]
 struct QuerySuccess {
     offer: DhcpOffer,
     server: String,
+    started: Instant,
     time: Duration,
 }
 
@@ -282,7 +285,7 @@ impl Display for QuerySuccess {
         write!(
             f,
             "Got lease \x1b[32m{}\x1b[0m, from \x1b[32m{}\x1b[0m in \x1b[32m{:.3?}\x1b[0m",
-            self.offer, self.server, self.time,
+            self.offer, self.server, self.time
         )
     }
 }
@@ -319,6 +322,7 @@ fn query(
                     return Ok(QuerySuccess {
                         offer,
                         server: server.to_owned(),
+                        started: start,
                         time: start.elapsed(),
                     });
                 }
@@ -372,6 +376,7 @@ fn renew(
                             subnet_mask: 24,
                         },
                         server: server.to_owned(),
+                        started: start,
                         time: start.elapsed(),
                     });
                 }
@@ -426,7 +431,7 @@ fn handle_query_command(
     cmd: &Query,
     config: &Config,
     thread_pool: &ThreadPool,
-) -> Result<(), QueryExecutionError> {
+) -> Result<Vec<QuerySuccess>, QueryExecutionError> {
     let server = match cmd.target {
         QueryTarget::Random => None,
         QueryTarget::Specific(i) => Some(config.servers.get(i).map(String::as_str).ok_or(
@@ -467,6 +472,14 @@ fn handle_query_command(
     }
     drop(tx);
 
+    let results: Vec<_> = rx.into_iter().collect();
+    let time = start.elapsed();
+    let successful: Vec<_> = results
+        .iter()
+        .filter_map(|res| res.as_ref().ok())
+        .cloned()
+        .collect();
+
     match (cmd.batch, cmd.verbose) {
         (0, true) => {
             // Easter egg :)
@@ -474,7 +487,7 @@ fn handle_query_command(
             println!("Rate: Blazingly fast!!!");
         }
         (1, _) | (_, true) => {
-            for res in rx {
+            for res in results {
                 match res {
                     Ok(success) => println!("{success}"),
                     Err(e) => print_error(&e),
@@ -482,17 +495,14 @@ fn handle_query_command(
             }
         }
         _ => {
-            let results: Vec<_> = rx.into_iter().collect();
-            let successful = results.iter().filter(|res| res.is_ok()).count();
-
             println!(
                 "Successful: {}{}\x1b[0m / \x1b[32m{}\x1b[0m",
-                if successful == cmd.batch as usize {
+                if successful.len() == cmd.batch as usize {
                     "\x1b[32m"
                 } else {
                     "\x1b[31m"
                 },
-                successful,
+                successful.len(),
                 cmd.batch
             );
 
@@ -527,18 +537,20 @@ fn handle_query_command(
                 );
             }
 
-            let time = start.elapsed();
-            let rate = (successful as f64 / time.as_nanos() as f64) * 10f64.powi(9);
+            let rate = (successful.len() as f64 / time.as_nanos() as f64) * 10f64.powi(9);
             println!(
                 "Queries took \x1b[32m{time:.3?}\x1b[0m, rate: \x1b[32m{rate:.1}\x1b[0m leases/s"
             );
         }
     }
 
-    Ok(())
+    Ok(successful)
 }
 
-fn handle_renew_command(cmd: &Renew, config: &Config) -> Result<(), QueryExecutionError> {
+fn handle_renew_command(
+    cmd: &Renew,
+    config: &Config,
+) -> Result<Option<QuerySuccess>, QueryExecutionError> {
     let server = match cmd.target {
         QueryTarget::Random => random_server(config),
         QueryTarget::Specific(i) => config.servers.get(i).map(String::as_str).ok_or(
@@ -556,11 +568,15 @@ fn handle_renew_command(cmd: &Renew, config: &Config) -> Result<(), QueryExecuti
     );
 
     match res {
-        Ok(success) => println!("{success}"),
-        Err(e) => print_error(&e),
+        Ok(success) => {
+            println!("{success}");
+            Ok(Some(success))
+        }
+        Err(e) => {
+            print_error(&e);
+            Ok(None)
+        }
     }
-
-    Ok(())
 }
 
 fn main() -> Result<(), ReadlineError> {
@@ -608,22 +624,49 @@ fn main() -> Result<(), ReadlineError> {
     list(&config);
     help();
 
+    let mut leases = HashMap::new();
+
     let mut rl = DefaultEditor::new()?;
     loop {
         let readline = rl.readline("> ");
         match readline {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;
+
+                // Prune expired
+                leases.retain(|_, success: &mut QuerySuccess| {
+                    success.started.elapsed() < Duration::from_secs(success.offer.lease_time.into())
+                });
+
                 match parse_command(&line) {
                     Ok(Command::Nop) => {}
                     Ok(Command::Quit) => break,
                     Ok(Command::Query(query)) => {
-                        handle_query_command(&query, &config, &thread_pool)
-                            .unwrap_or_else(|e| print_error(&e));
+                        match handle_query_command(&query, &config, &thread_pool) {
+                            Ok(successful) => {
+                                for success in successful {
+                                    let ip = success.offer.ip;
+                                    let server = success.server.clone();
+                                    if let Some(previous) = leases.insert(ip, success) {
+                                        println!("\x1b[31mGot duplicate lease for {ip} from {server}\x1b[0m");
+                                        let server = previous.server;
+                                        println!("{ip} was previously obtained from {server}");
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                print_error(&e);
+                                continue;
+                            }
+                        };
                     }
-                    Ok(Command::Renew(renew)) => {
-                        handle_renew_command(&renew, &config).unwrap_or_else(|e| print_error(&e));
-                    }
+                    Ok(Command::Renew(renew)) => match handle_renew_command(&renew, &config) {
+                        Ok(Some(success)) => {
+                            leases.insert(success.offer.ip, success);
+                        }
+                        Ok(None) => {}
+                        Err(e) => print_error(&e),
+                    },
                     Ok(Command::GenerateMac) => println!("{}", random_mac_addr()),
                     Ok(Command::List) => list(&config),
                     Ok(Command::Conf) => println!("\x1b[32m{config:#?}\x1b[0m"),

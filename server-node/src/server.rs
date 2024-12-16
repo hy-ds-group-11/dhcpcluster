@@ -235,8 +235,7 @@ impl Server {
         self.handle_majority(majority);
 
         for peer in self.peers.values() {
-            peer.send_message(Message::Coordinator);
-            peer.send_message(Message::SetMajority(self.majority));
+            peer.send_message(Message::Coordinator { majority });
         }
 
         #[allow(
@@ -330,6 +329,9 @@ impl Server {
             self.become_coordinator();
         }
 
+        // If coordinator was lost, we need to hold an election again.
+        // It's possible, that during this election, the majority-bit is incorrect.
+        // This is acceptable, because DHCP clients should never use conflicting addresses.
         if Some(peer_id) == self.coordinator_id {
             self.start_election();
         }
@@ -440,10 +442,9 @@ impl Server {
             Message::Heartbeat => console::debug!("Received heartbeat from {sender_id}"),
             Message::Election => self.handle_election(sender_id),
             Message::Okay => self.handle_okay(sender_id),
-            Message::Coordinator => self.handle_coordinator(sender_id),
+            Message::Coordinator { majority } => self.handle_coordinator(sender_id, majority),
             Message::Lease(lease) => self.handle_add_lease(lease),
             Message::SetPool(update) => self.handle_set_pool(update),
-            Message::SetMajority(majority) => self.handle_majority(majority),
             Message::Join(..) | Message::JoinAck { .. } => {
                 console::warning!("Server received unexpected {message:?} from peer {sender_id}");
             }
@@ -473,10 +474,11 @@ impl Server {
         }
     }
 
-    fn handle_coordinator(&mut self, sender_id: peer::Id) {
+    fn handle_coordinator(&mut self, sender_id: peer::Id, majority: bool) {
         console::log!("Recognizing {sender_id} as Coordinator");
         self.coordinator_id = Some(sender_id);
         self.election_state = ElectionState::Follower;
+        self.handle_majority(majority);
         if sender_id < self.config.id {
             self.start_election();
         }

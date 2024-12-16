@@ -25,10 +25,11 @@ pub enum Message {
     Heartbeat,
     Election,
     Okay,
-    Coordinator,
+    Coordinator {
+        majority: bool,
+    },
     Lease(Lease),
     SetPool(Ipv4Range),
-    SetMajority(bool),
 }
 
 impl RecvCbor<Message> for TcpStream {}

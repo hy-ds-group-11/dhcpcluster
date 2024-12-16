@@ -23,7 +23,7 @@ use std::{
     iter::Peekable,
     net::{AddrParseError, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs},
     num::{NonZero, ParseIntError},
-    ops::Range,
+    ops::{ControlFlow, Range},
     path::{Path, PathBuf},
     process::exit,
     str::FromStr,
@@ -347,7 +347,7 @@ fn renew(
     default_port: u16,
     timeout: Option<Duration>,
     mac_address: MacAddr,
-    ip_address: Ipv4Addr,
+    lease: &DhcpOffer,
 ) -> Result<QuerySuccess, QueryError> {
     let start = Instant::now();
 
@@ -355,7 +355,7 @@ fn renew(
 
     while let Some(addr) = addrs.next() {
         let mut stream = connect_timeout(&addr, timeout, server)?;
-        match client::get_ack(&mut stream, mac_address, ip_address) {
+        match client::get_ack(&mut stream, mac_address, lease.ip) {
             Err(e) => match addrs.peek() {
                 Some(_) => continue, // Try next DNS result
                 None => {
@@ -365,15 +365,13 @@ fn renew(
                     })
                 }
             },
-            Ok(acked) =>
-            // TODO: offer TTL and subnet mask are incorrect;
-            {
+            Ok(acked) => {
                 if acked {
                     return Ok(QuerySuccess {
                         offer: DhcpOffer {
-                            ip: ip_address,
-                            lease_time: 3600,
-                            subnet_mask: 24,
+                            ip: lease.ip,
+                            lease_time: lease.lease_time,
+                            subnet_mask: lease.subnet_mask,
                         },
                         server: server.to_owned(),
                         started: start,
@@ -549,6 +547,7 @@ fn handle_query_command(
 
 fn handle_renew_command(
     cmd: &Renew,
+    lease: &DhcpOffer,
     config: &Config,
 ) -> Result<Option<QuerySuccess>, QueryExecutionError> {
     let server = match cmd.target {
@@ -564,7 +563,7 @@ fn handle_renew_command(
         config.default_port,
         config.timeout,
         cmd.mac_address,
-        cmd.ip_address,
+        lease,
     );
 
     match res {
@@ -577,6 +576,55 @@ fn handle_renew_command(
             Ok(None)
         }
     }
+}
+
+fn execute_command(
+    command: Command,
+    config: &Config,
+    thread_pool: &ThreadPool,
+    leases: &mut HashMap<Ipv4Addr, QuerySuccess>,
+) -> ControlFlow<()> {
+    match command {
+        Command::Nop => {}
+        Command::Quit => return ControlFlow::Break(()),
+        Command::Query(query) => match handle_query_command(&query, config, thread_pool) {
+            Ok(successful) => {
+                for success in successful {
+                    let ip = success.offer.ip;
+                    let server = success.server.clone();
+                    if let Some(previous) = leases.insert(ip, success) {
+                        println!("\x1b[31mGot duplicate lease for {ip} from {server}\x1b[0m");
+                        let server = previous.server;
+                        println!("{ip} was previously obtained from {server}");
+                    }
+                }
+            }
+            Err(e) => print_error(&e),
+        },
+        Command::Renew(renew) => {
+            if let Some(lease) = leases.get(&renew.ip_address) {
+                match handle_renew_command(&renew, &lease.offer, config) {
+                    Ok(Some(success)) => {
+                        leases.insert(success.offer.ip, success);
+                    }
+                    Ok(None) => {}
+                    Err(e) => print_error(&e),
+                }
+            } else {
+                println!("Client currently cannot attempt to renew:");
+                println!("- Leases it did not acquire previously");
+                println!("- Expired leases");
+                // TODO: and additionally, it doesn't associate MAC address with lease anywhere.
+                // If it did, we wouldn't necessarily have to specify MAC manyally
+            }
+        }
+        Command::GenerateMac => println!("{}", random_mac_addr()),
+        Command::List => list(config),
+        Command::Conf => println!("\x1b[32m{config:#?}\x1b[0m"),
+        Command::Help => help(),
+    }
+
+    ControlFlow::Continue(())
 }
 
 fn main() -> Result<(), ReadlineError> {
@@ -639,38 +687,11 @@ fn main() -> Result<(), ReadlineError> {
                 });
 
                 match parse_command(&line) {
-                    Ok(Command::Nop) => {}
-                    Ok(Command::Quit) => break,
-                    Ok(Command::Query(query)) => {
-                        match handle_query_command(&query, &config, &thread_pool) {
-                            Ok(successful) => {
-                                for success in successful {
-                                    let ip = success.offer.ip;
-                                    let server = success.server.clone();
-                                    if let Some(previous) = leases.insert(ip, success) {
-                                        println!("\x1b[31mGot duplicate lease for {ip} from {server}\x1b[0m");
-                                        let server = previous.server;
-                                        println!("{ip} was previously obtained from {server}");
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                print_error(&e);
-                                continue;
-                            }
-                        };
-                    }
-                    Ok(Command::Renew(renew)) => match handle_renew_command(&renew, &config) {
-                        Ok(Some(success)) => {
-                            leases.insert(success.offer.ip, success);
+                    Ok(command) => {
+                        if execute_command(command, &config, &thread_pool, &mut leases).is_break() {
+                            break;
                         }
-                        Ok(None) => {}
-                        Err(e) => print_error(&e),
-                    },
-                    Ok(Command::GenerateMac) => println!("{}", random_mac_addr()),
-                    Ok(Command::List) => list(&config),
-                    Ok(Command::Conf) => println!("\x1b[32m{config:#?}\x1b[0m"),
-                    Ok(Command::Help) => help(),
+                    }
                     Err(e) => print_error(&e),
                 }
             }
